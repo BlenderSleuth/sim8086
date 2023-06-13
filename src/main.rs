@@ -1,8 +1,10 @@
+#![allow(dead_code)]
+
 use std::fs::File;
 use std::io::prelude::*;
-use std::mem::swap;
 use std::num::{NonZeroI16, NonZeroI8};
 use std::path::Path;
+use std::fmt::{self, Formatter};
 
 #[derive(PartialEq)]
 enum AddressDisplacement {
@@ -11,22 +13,12 @@ enum AddressDisplacement {
     Word(NonZeroI16),
 }
 
-impl AddressDisplacement {
-    fn to_string(&self) -> String {
-        use AddressDisplacement::*;
-
-        match self {
-            Zero => String::new(),
-            Byte(disp) => disp.to_string(),
-            Word(disp) => disp.to_string(),
-        }
-    }
-
-    fn to_string_with_sign(&self) -> String {
+impl fmt::Display for AddressDisplacement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use AddressDisplacement::*;
 
         let disp = match self {
-            Zero => return String::new(),
+            Zero => return write!(f, ""),
             Byte(disp) => disp.get() as i16,
             Word(disp) => disp.get(),
         };
@@ -34,16 +26,7 @@ impl AddressDisplacement {
         let sign = if disp > 0 { "+" } else { "-" };
         let disp_abs = disp.abs();
 
-        format!("{sign} {disp_abs}")
-    }
-
-    fn to_direct_address_string(&self) -> String {
-        use AddressDisplacement::*;
-
-        match self {
-            Zero => String::new(),
-            Byte(_) | Word(_) => format!("[{}]", self.to_string()),
-        }
+        write!(f, "{sign} {disp_abs}")
     }
 }
 
@@ -74,6 +57,26 @@ impl From<i8> for AddressDisplacement {
 impl From<u8> for AddressDisplacement {
     fn from(value: u8) -> Self {
         (value as i8).into()
+    }
+}
+
+impl AddressDisplacement {
+    fn to_signed(&self) -> i16 {
+        use AddressDisplacement::*;
+        match self {
+            Zero => 0,
+            Byte(disp) => disp.get() as i16,
+            Word(disp) => disp.get(),
+        }
+    }
+    
+    fn to_unsigned(&self) -> u16 {
+        use AddressDisplacement::*;
+        match self {
+            Zero => 0,
+            Byte(disp) => disp.get() as u16,
+            Word(disp) => disp.get() as u16,
+        }
     }
 }
 
@@ -126,10 +129,12 @@ impl Register {
             _ => unreachable!(),
         }
     }
+}
 
-    fn to_string(&self) -> &'static str {
+impl fmt::Display for Register {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use Register::*;
-        match self {
+        write!(f, "{}", match self {
             AL => "al",
             AX => "ax",
             CL => "cl",
@@ -146,7 +151,7 @@ impl Register {
             SI => "si",
             BH => "bh",
             DI => "di",
-        }
+        })
     }
 }
 
@@ -176,15 +181,17 @@ impl SegmentRegister {
             _ => unreachable!(),
         }
     }
+}
 
-    fn to_string(&self) -> &'static str {
+impl fmt::Display for SegmentRegister {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use SegmentRegister::*;
-        match self {
+        write!(f, "{}", match self {
             ES => "es",
             CS => "cs",
             SS => "ss",
             DS => "ds",
-        }
+        })
     }
 }
 
@@ -194,16 +201,12 @@ struct AddressCalculation {
     segment_override: Option<SegmentRegister>,
 }
 
-impl AddressCalculation {
-    fn to_string(&self) -> String {
-        if self.disp == AddressDisplacement::Zero {
-            format!("[{}]", self.rm.to_string())
-        } else {
-            format!(
-                "[{} {}]",
-                self.rm.to_string(),
-                self.disp.to_string_with_sign()
-            )
+impl fmt::Display for AddressCalculation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use AddressDisplacement::*;
+        match self.disp {
+            Zero => write!(f, "[{}]", self.rm),
+            Byte(_) | Word(_) => write!(f, "[{} {}]", self.rm, self.disp)
         }
     }
 }
@@ -222,7 +225,6 @@ enum RegDisplacement {
 
 impl RegDisplacement {
     // R/M is truncated to 3 bits
-    #[allow(dead_code)]
     fn new(rm: u8) -> Self {
         let rm = rm & 0b111;
         Self::new_checked(rm)
@@ -245,11 +247,13 @@ impl RegDisplacement {
             _ => unreachable!(),
         }
     }
+}
 
-    fn to_string(&self) -> &'static str {
+impl fmt::Display for RegDisplacement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use RegDisplacement::*;
 
-        match self {
+        write!(f, "{}", match self {
             BXpSI => "bx + si",
             BXpDI => "bx + di",
             BPpSI => "bp + si",
@@ -258,19 +262,18 @@ impl RegDisplacement {
             DI => "di",
             BP => "bp",
             BX => "bx",
-        }
+        })
     }
 }
 
 enum RegisterMemory {
-    DirectAddress(AddressDisplacement),
+    DirectAddress(u16),
     Memory(AddressCalculation),
     Register(Register),
 }
 
 impl RegisterMemory {
     // R/M is truncated to 3 bits, mode is truncated to 2 bits
-    #[allow(dead_code)]
     fn new(rm: u8, mode: u8, wflag: bool, disp: AddressDisplacement, segment_override: Option<SegmentRegister>) -> Self {
         let rm = rm & 0b111;
         let mode = mode & 0b111;
@@ -311,8 +314,8 @@ impl RegisterMemory {
         assert!(mode <= 0b11);
 
         match (rm, mode) {
-            (0b110, 0b00) => RegisterMemory::DirectAddress(disp),
-            (_, 0b00) | (_, 0b10) | (_, 0b01) => RegisterMemory::Memory(AddressCalculation {
+            (0b110, 0b00) => RegisterMemory::DirectAddress(disp.to_unsigned()),
+            (_, 0b00 | 0b10 | 0b01) => RegisterMemory::Memory(AddressCalculation {
                 rm: RegDisplacement::new_checked(rm),
                 disp,
                 segment_override,
@@ -321,28 +324,34 @@ impl RegisterMemory {
             _ => unreachable!(),
         }
     }
+}
 
-    fn to_string(&self) -> String {
+impl fmt::Display for RegisterMemory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use RegisterMemory::*;
 
         match self {
-            DirectAddress(disp) => disp.to_direct_address_string(),
-            Memory(addr_calc) => { 
-                let addr_calc_str = addr_calc.to_string();
+            DirectAddress(disp) => write!(f, "[{disp}]"),
+            Memory(addr_calc) => {
                 match &addr_calc.segment_override {
-                    Some(segment) => format!("{}:{addr_calc_str}", segment.to_string()),
-                    None => addr_calc_str,
+                    Some(segment) => write!(f, "{segment}:{addr_calc}"),
+                    None => write!(f, "{addr_calc}")
                 }
             }
-            Register(reg) => format!("[{}]", reg.to_string())
+            Register(reg) => write!(f, "{}", reg.to_string())
         }
     }
 }
 
 // Gets the next byte from the instruction stream and increments i
 fn get_byte(i: &mut usize, instructions: &[u8]) -> u8 {
+    let inst = instructions[*i];
     *i += 1;
-    instructions[*i]
+    inst
+}
+
+fn get_signed_byte(i: &mut usize, instructions: &[u8]) -> i8 {
+    get_byte(i, instructions) as i8
 }
 
 // Gets the next word from the instruction stream and increments i
@@ -350,6 +359,10 @@ fn get_word(i: &mut usize, instructions: &[u8]) -> u16 {
     let lo_byte = get_byte(i, instructions) as u16;
     let hi_byte = get_byte(i, instructions) as u16;
     hi_byte << 8 | lo_byte
+}
+
+fn get_signed_word(i: &mut usize, instructions: &[u8]) -> i16 {
+    get_word(i, instructions) as i16
 }
 
 // Gets signed data
@@ -363,15 +376,284 @@ fn get_data(wflag: bool, i: &mut usize, instructions: &[u8]) -> u16 {
 
 fn get_signed_data(wflag: bool, i: &mut usize, instructions: &[u8]) -> i16 {
     if wflag {
-        get_word(i, instructions) as i16
+        get_signed_word(i, instructions)
     } else {
-        get_byte(i, instructions) as i16
+        get_signed_byte(i, instructions) as i16
     }
 }
 
 // Returns a bool flag corresponding to the value of a specified bit
 fn flag(value: u8, bit: u8) -> bool {
     ((value >> bit) & 1) != 0
+}
+
+fn opcode_cmp(value: u8, mask: u8, format: u8) -> bool {
+    value & mask == format & mask
+}
+
+enum Immediate {
+    Byte(i8),
+    Word(i16),
+}
+
+impl Immediate {
+    fn new(wflag: bool, i: &mut usize, instructions: &[u8]) -> Self {
+        if wflag {
+            Immediate::Word(get_signed_word(i, &instructions))
+        } else {
+            Immediate::Byte(get_signed_byte(i, &instructions))
+        }
+    }
+}
+
+impl fmt::Display for Immediate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use Immediate::*;
+        match self {
+            Byte(value) =>  write!(f, "byte {value}"),
+            Word(value) =>  write!(f, "word {value}"),
+        }
+    }
+}
+
+struct MovInstruction {
+    src: MoveSource,
+    dest: MoveDestination
+}
+
+impl fmt::Display for MovInstruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "mov {}, {}", self.dest, self.src)
+    }
+}
+
+enum OperatorSource {
+    Immediate(Immediate),
+    RM(RegisterMemory),
+}
+
+impl fmt::Display for OperatorSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use OperatorSource::*;
+        match self {
+            Immediate(immediate) => write!(f, "{immediate}"),
+            RM(rm) => write!(f, "{rm}"),
+        }
+    }
+}
+
+enum MoveSource {
+    Immediate(Immediate),
+    RM(RegisterMemory),
+    SegmentRegister(SegmentRegister)
+}
+
+impl fmt::Display for MoveSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use MoveSource::*;
+        match self {
+            Immediate(immediate) => write!(f, "{immediate}"),
+            RM(rm) => write!(f, "{rm}"),
+            SegmentRegister(segment) => write!(f, "{segment}"),
+        }
+    }
+}
+
+enum MoveDestination {
+    RM(RegisterMemory),
+    SegmentRegister(SegmentRegister)
+}
+
+impl fmt::Display for MoveDestination{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use MoveDestination::*;
+        match self {
+            RM(rm) => write!(f, "{rm}"),
+            SegmentRegister(segment) => write!(f, "{segment}"),
+        }
+    }
+}
+
+enum Instruction {
+    Mov(MovInstruction),
+    Unknown,
+}
+
+impl fmt::Display for Instruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use Instruction::*;
+        match self {
+            Mov(args) => write!(f, "{args}"),
+            Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+struct InstructionIterator<'a> {
+    i: usize,
+    instructions: &'a [u8],
+    segment_override: Option<SegmentRegister>,
+}
+
+impl<'a> InstructionIterator<'a> {
+    fn new(instructions: &'a [u8]) -> Self {
+        Self {
+            i: 0,
+            instructions,
+            segment_override: None
+        }
+    }
+}
+
+impl<'a> Iterator for InstructionIterator<'a> {
+    type Item = Instruction;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        use Instruction::*;
+        
+        // Early out for end of stream
+        if self.i >= self.instructions.len() {
+            return None;
+        }
+        
+        // Keep mutable reference
+        let i = &mut self.i;
+        
+        Some(loop {
+            let byte1 = get_byte(i, self.instructions);
+
+            // Mov (Register/memory to/from register)
+            if opcode_cmp(byte1, 0b11111100, 0b10001000) {
+                let dflag = flag(byte1, 1);
+                let wflag = flag(byte1, 0);
+
+                let byte2 = get_byte(i, self.instructions);
+
+                let mode_bits = byte2 >> 6;
+                let reg_bits = byte2 >> 3;
+                let rm_bits = byte2;
+
+                let rm = RegisterMemory::new_from_instructions(
+                    rm_bits,
+                    mode_bits,
+                    wflag,
+                    self.segment_override.take(),
+                    i,
+                    self.instructions,
+                );
+
+                let reg = Register::new(reg_bits, wflag);
+
+                if dflag {
+                    break Mov(MovInstruction {
+                        src: MoveSource::RM(rm),
+                        dest: MoveDestination::RM(RegisterMemory::Register(reg)),
+                    })
+                } else {
+                    break Mov(MovInstruction {
+                        src: MoveSource::RM(RegisterMemory::Register(reg)),
+                        dest: MoveDestination::RM(rm),
+                    })
+                }
+            }
+            // Mov (Immediate to register/memory)
+            else if opcode_cmp(byte1, 0b11111110, 0b11000110) {
+                let wflag = flag(byte1, 0);
+
+                let byte2 = get_byte(i, self.instructions);
+
+                let mode_bits = byte2 >> 6;
+                let rm_bits = byte2;
+
+                let rm = RegisterMemory::new_from_instructions(
+                    rm_bits,
+                    mode_bits,
+                    wflag,
+                    self.segment_override.take(),
+                    i,
+                    self.instructions,
+                );
+
+                break Mov(MovInstruction {
+                    src: MoveSource::Immediate(Immediate::new(wflag, i, self.instructions)),
+                    dest: MoveDestination::RM(rm),
+                })
+            }
+            // Mov (Immediate to register)
+            else if opcode_cmp(byte1, 0b11110000, 0b10110000) {
+                let wflag = flag(byte1, 3);
+                let reg_bits = byte1;
+                let reg = Register::new(reg_bits, wflag);
+
+                break Mov(MovInstruction {
+                    src: MoveSource::Immediate(Immediate::new(wflag, i, self.instructions)),
+                    dest: MoveDestination::RM(RegisterMemory::Register(reg)),
+                })
+            }
+            // Mov (Memory to accumulator / Accumulator to memory)
+            else if opcode_cmp(byte1, 0b11111100, 0b10100000) {
+                let dflag = flag(byte1, 1);
+                let wflag = flag(byte1, 0);
+
+                let addr = RegisterMemory::DirectAddress(get_data(wflag, i, self.instructions));
+
+                if dflag {
+                    break Mov(MovInstruction {
+                        src: MoveSource::RM(RegisterMemory::Register(Register::AX)),
+                        dest: MoveDestination::RM(addr),
+                    })
+                } else {
+                    break Mov(MovInstruction {
+                        src: MoveSource::RM(addr),
+                        dest: MoveDestination::RM(RegisterMemory::Register(Register::AX)),
+                    })
+                }
+            }
+            // Mov (Register/memory to segment register / Segment register to register/memory)
+            else if opcode_cmp(byte1, 0b11111101, 0b10001100) {
+                let dflag = flag(byte1, 1);
+                let wflag = true;
+
+                let byte2 = get_byte(i, self.instructions);
+
+                let mode_bits = byte2 >> 6;
+                let sr_bits = byte2 >> 3;
+                let rm_bits = byte2;
+
+                let sr = SegmentRegister::new(sr_bits);
+
+                let rm = RegisterMemory::new_from_instructions(
+                    rm_bits,
+                    mode_bits,
+                    wflag,
+                    self.segment_override.take(),
+                    i,
+                    self.instructions,
+                );
+
+                if dflag {
+                    break Mov(MovInstruction {
+                        src: MoveSource::RM(rm),
+                        dest: MoveDestination::SegmentRegister(sr),
+                    })
+                } else {
+                    break Mov(MovInstruction {
+                        src: MoveSource::SegmentRegister(sr),
+                        dest: MoveDestination::RM(rm),
+                    })
+                }
+            }
+            // Segment override prefix
+            else if opcode_cmp(byte1, 0b11100111, 0b00100110) {
+                let sr_bits = byte1 >> 3;
+                self.segment_override.replace(SegmentRegister::new(sr_bits));
+                continue
+            }
+            else {
+                break Unknown
+            }
+        })
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -383,12 +665,12 @@ fn main() -> std::io::Result<()> {
     // listing_0040_challenge_movs
     // listing_0041_add_sub_cmp_jnz
     // listing_0042_completionist_decode
-    let listing_path = part_one_tests.join(Path::new("listing_0042_completionist_decode"));
+    let listing_path = part_one_tests.join(Path::new("listing_0040_challenge_movs"));
 
     // output
-    let test_path = Path::new("output");
+    //let test_path = Path::new("output");
 
-    let mut file = match File::open(&test_path) {
+    let mut file = match File::open(&listing_path) {
         Err(why) => panic!("couldn't open {}: {}", listing_path.display(), why),
         Ok(file) => file,
     };
@@ -398,181 +680,8 @@ fn main() -> std::io::Result<()> {
 
     println!("bits 16");
 
-    let mut segment_override: Option<SegmentRegister> = None;
-    let mut i = 0;
-    while i < instructions.len() {
-        let byte1 = instructions[i];
-
-        let mut opcode = 0;
-        for op_bit in (0..8).rev() {
-            opcode <<= 1;
-            opcode |= (byte1 >> op_bit) & 1;
-
-            let line_opt = match opcode {
-                // Segment override
-                0b00100110 => {
-                    // ES
-                    segment_override = Some(SegmentRegister::ES);
-                    break;
-                }
-                0b00101110 => {
-                    // CS
-                    segment_override = Some(SegmentRegister::CS);
-                    break;
-                }
-                0b00110110 => {
-                    // SS
-                    segment_override = Some(SegmentRegister::SS);
-                    break;
-                }
-                0b00111110 => {
-                    // DS
-                    segment_override = Some(SegmentRegister::DS);
-                    break;
-                }
-                // MOV
-                0b100010 => {
-                    // Mov (Register/memory to/from register)
-                    let opcode_name = "mov";
-
-                    let dflag = flag(byte1, 1);
-                    let wflag = flag(byte1, 0);
-
-                    let byte2 = get_byte(&mut i, &instructions);
-
-                    let mode_bits = byte2 >> 6;
-                    let reg_bits = byte2 >> 3;
-                    let rm_bits = byte2;
-
-                    let rm = RegisterMemory::new_from_instructions(
-                        rm_bits,
-                        mode_bits,
-                        wflag,
-                        segment_override.take(),
-                        &mut i,
-                        &instructions,
-                    );
-                    let rm_str = rm.to_string();
-
-                    let reg = Register::new(reg_bits, wflag);
-                    let reg_str = reg.to_string();
-
-                    let mut source = reg_str;
-                    let mut dest = rm_str.as_str();
-                    if dflag {
-                        swap(&mut source, &mut dest);
-                    }
-
-                    Some(format!("{opcode_name} {dest}, {source}"))
-                }
-                0b1100011 => {
-                    // Mov (Immediate to register/memory)
-                    let opcode_name = "mov";
-
-                    let wflag = flag(byte1, 0);
-
-                    let byte2 = get_byte(&mut i, &instructions);
-
-                    let mode_bits = byte2 >> 6;
-                    let rm_bits = byte2;
-
-                    let rm = RegisterMemory::new_from_instructions(
-                        rm_bits,
-                        mode_bits,
-                        wflag,
-                        segment_override.take(),
-                        &mut i,
-                        &instructions,
-                    );
-                    let rm_str = rm.to_string();
-
-                    let immediate = get_signed_data(wflag, &mut i, &instructions);
-
-                    let immediate_type = if wflag { "word" } else { "byte" };
-
-                    Some(format!("{opcode_name} {rm_str}, {immediate_type} {immediate}"))
-                }
-                0b1011 => {
-                    // Mov (Immediate to register)
-                    let opcode_name = "mov";
-
-                    let wflag = flag(byte1, 3);
-                    let reg_bits = byte1;
-                    let reg = Register::new(reg_bits, wflag);
-                    let reg_str = reg.to_string();
-
-                    let immediate = get_signed_data(wflag, &mut i, &instructions);
-
-                    Some(format!("{opcode_name} {reg_str}, {immediate}"))
-                }
-                0b101000 => {
-                    // Mov (Memory to accumulator / Accumulator to memory)
-                    let opcode_name = "mov";
-
-                    let dflag = flag(byte1, 1);
-                    let wflag = flag(byte1, 0);
-
-                    let addr = get_data(wflag, &mut i, &instructions);
-                    let addr_str = format!("[{addr}]");
-
-                    let mut source = "ax";
-                    let mut dest = addr_str.as_str();
-                    if dflag {
-                        swap(&mut source, &mut dest);
-                    }
-
-                    Some(format!("{opcode_name} {source}, {dest}"))
-                }
-                0b10001110 | 0b10001100 => {
-                    // Mov (Register/memory to segment register / Segment register to register/memory)
-                    let opcode_name = "mov";
-
-                    let dflag = flag(byte1, 1);
-                    let wflag = true;
-
-                    let byte2 = get_byte(&mut i, &instructions);
-
-                    let mode_bits = byte2 >> 6;
-                    let sr_bits = byte2 >> 3;
-                    let rm_bits = byte2;
-
-                    let sr = SegmentRegister::new(sr_bits);
-                    let sr_str = sr.to_string();
-
-                    let rm = RegisterMemory::new_from_instructions(
-                        rm_bits,
-                        mode_bits,
-                        wflag,
-                        segment_override.take(),
-                        &mut i,
-                        &instructions,
-                    );
-                    let rm_str = rm.to_string();
-
-                    let mut source = sr_str;
-                    let mut dest = rm_str.as_str();
-                    if dflag {
-                        swap(&mut source, &mut dest);
-                    }
-
-                    Some(format!("{opcode_name} {dest}, {source}"))
-                }
-                // ADD
-                _ => None,
-            };
-
-            if let Some(line) = line_opt {
-                println!("{line}");
-                break;
-            }
-
-            if op_bit == 0 {
-                // Opcode didn't match
-                println!("unknown");
-            }
-        }
-
-        i += 1;
+    for instruction in InstructionIterator::new(&instructions) {
+        println!("{instruction}");
     }
 
     Ok(())
