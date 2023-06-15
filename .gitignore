@@ -13,9 +13,11 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
-# asm and bin outputs
+# asm and bin in/outputs
 **/output
 **/output.asm
+**/input
+**/input.asm
 
 # IDE configs
 .vscode/
