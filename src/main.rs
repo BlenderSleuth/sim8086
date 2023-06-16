@@ -532,7 +532,7 @@ enum MoveSource {
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
 }
-
+// TODO: rename to be more generic
 impl From<OperatorSource> for MoveSource {
     fn from(src: OperatorSource) -> Self {
         use MoveSource::*;
@@ -554,6 +554,7 @@ impl fmt::Display for MoveSource {
     }
 }
 
+// TODO: rename as this is also used as a push source
 enum MoveDestination {
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
@@ -625,6 +626,7 @@ impl fmt::Display for MoveOp {
 enum Instruction {
     // Move
     Mov(MoveOp),
+    Push(MoveDestination),
     // Math ops
     Add(RegisterMemoryOp),
     Or(RegisterMemoryOp),
@@ -679,6 +681,7 @@ impl fmt::Display for Instruction {
         use Instruction::*;
         match self {
             Mov(op) => write!(f, "mov {op}"),
+            Push(op) => write!(f, "push {op}"),
             Add(op) => write!(f, "add {op}"),
             Or(op) => write!(f, "or {op}"),
             Adc(op) => write!(f, "adc {op}"),
@@ -906,6 +909,35 @@ impl Iterator for InstructionIterator {
 
                 break Instruction::new_math_instruction(math_op, rm_op);
             }
+            // Push (Register/memory)
+            else if opcode_cmp(byte1, 0b11111111, 0b11111111) {
+                let wflag = true;
+
+                let byte2 = instructions.next_byte();
+
+                let mode = byte2 >> 6;
+                let rm = byte2;
+
+                break Push(MoveDestination::RM(RegisterMemory::new_mod_rm(
+                    wflag,
+                    mode,
+                    rm,
+                    self.segment_override.take(),
+                    instructions,
+                )));
+            }
+            // Push (Register)
+            else if opcode_cmp(byte1, 0b11111000, 0b01010000) {
+                let wflag = true;
+                let reg = Register::new(wflag, byte1);
+
+                break Push(MoveDestination::RM(RegisterMemory::Register(reg)));
+            }
+            // Push (Segment Register)
+            else if opcode_cmp(byte1, 0b11100111, 0b00000110) {
+                let sr = SegmentRegister::new(byte1 >> 3);
+                break Push(MoveDestination::SegmentRegister(sr));
+            }
 
             // Match jump opcodes. Increment is relative to the next instruction, two bytes later
             let increment = instructions.next_byte_signed() + 2;
@@ -948,7 +980,7 @@ fn main() -> std::io::Result<()> {
     // listing_0040_challenge_movs
     // listing_0041_add_sub_cmp_jnz
     // listing_0042_completionist_decode
-    let listing_path = part_one_tests.join(Path::new("listing_0041_add_sub_cmp_jnz"));
+    let listing_path = part_one_tests.join(Path::new("listing_0042_completionist_decode"));
 
     // output
     // let test_path = Path::new("input");
