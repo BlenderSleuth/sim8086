@@ -527,15 +527,15 @@ impl fmt::Display for RegisterMemoryOp {
     }
 }
 
-enum MoveSource {
+enum ImmediateRegisterMemorySegment {
     Immediate(Immediate),
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
 }
-// TODO: rename to be more generic
-impl From<OperatorSource> for MoveSource {
+
+impl From<OperatorSource> for ImmediateRegisterMemorySegment {
     fn from(src: OperatorSource) -> Self {
-        use MoveSource::*;
+        use ImmediateRegisterMemorySegment::*;
         match src {
             OperatorSource::Immediate(value) => Immediate(value),
             OperatorSource::RM(rm) => RM(rm),
@@ -543,9 +543,9 @@ impl From<OperatorSource> for MoveSource {
     }
 }
 
-impl fmt::Display for MoveSource {
+impl fmt::Display for ImmediateRegisterMemorySegment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use MoveSource::*;
+        use ImmediateRegisterMemorySegment::*;
         match self {
             Immediate(immediate) => write!(f, "{immediate}"),
             RM(rm) => write!(f, "{rm}"),
@@ -554,15 +554,14 @@ impl fmt::Display for MoveSource {
     }
 }
 
-// TODO: rename as this is also used as a push source
-enum MoveDestination {
+enum RegisterMemorySegment {
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
 }
 
-impl fmt::Display for MoveDestination {
+impl fmt::Display for RegisterMemorySegment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use MoveDestination::*;
+        use RegisterMemorySegment::*;
         match self {
             RM(rm) => write!(f, "{rm}"),
             SegmentRegister(segment) => write!(f, "{segment}"),
@@ -571,8 +570,8 @@ impl fmt::Display for MoveDestination {
 }
 
 struct MoveOp {
-    dest: MoveDestination,
-    src: MoveSource,
+    dest: RegisterMemorySegment,
+    src: ImmediateRegisterMemorySegment,
 }
 
 impl MoveOp {
@@ -596,13 +595,13 @@ impl MoveOp {
 
         if dflag {
             Self {
-                src: MoveSource::RM(rm),
-                dest: MoveDestination::SegmentRegister(sr),
+                src: ImmediateRegisterMemorySegment::RM(rm),
+                dest: RegisterMemorySegment::SegmentRegister(sr),
             }
         } else {
             Self {
-                src: MoveSource::SegmentRegister(sr),
-                dest: MoveDestination::RM(rm),
+                src: ImmediateRegisterMemorySegment::SegmentRegister(sr),
+                dest: RegisterMemorySegment::RM(rm),
             }
         }
     }
@@ -611,7 +610,7 @@ impl MoveOp {
 impl From<RegisterMemoryOp> for MoveOp {
     fn from(op: RegisterMemoryOp) -> Self {
         Self {
-            dest: MoveDestination::RM(op.dest),
+            dest: RegisterMemorySegment::RM(op.dest),
             src: op.src.into(),
         }
     }
@@ -626,7 +625,9 @@ impl fmt::Display for MoveOp {
 enum Instruction {
     // Move
     Mov(MoveOp),
-    Push(MoveDestination),
+    // Stack ops
+    Push(RegisterMemorySegment),
+    Pop(RegisterMemorySegment),
     // Math ops
     Add(RegisterMemoryOp),
     Or(RegisterMemoryOp),
@@ -681,7 +682,9 @@ impl fmt::Display for Instruction {
         use Instruction::*;
         match self {
             Mov(op) => write!(f, "mov {op}"),
-            Push(op) => write!(f, "push {op}"),
+            // Todo(ben): conditionally use 'word' for rm
+            Push(op) => write!(f, "push word {op}"),
+            Pop(op) => write!(f, "pop word {op}"),
             Add(op) => write!(f, "add {op}"),
             Or(op) => write!(f, "or {op}"),
             Adc(op) => write!(f, "adc {op}"),
@@ -824,8 +827,8 @@ impl Iterator for InstructionIterator {
                 let reg = Register::new(wflag, reg_bits);
 
                 break Mov(MoveOp {
-                    src: MoveSource::Immediate(Immediate::new(sflag, wflag, instructions)),
-                    dest: MoveDestination::RM(RegisterMemory::Register(reg)),
+                    src: ImmediateRegisterMemorySegment::Immediate(Immediate::new(sflag, wflag, instructions)),
+                    dest: RegisterMemorySegment::RM(RegisterMemory::Register(reg)),
                 });
             }
             // Mov (Memory to accumulator / Accumulator to memory)
@@ -838,13 +841,13 @@ impl Iterator for InstructionIterator {
 
                 break Mov(if dflag {
                     MoveOp {
-                        src: MoveSource::RM(accumulator),
-                        dest: MoveDestination::RM(addr),
+                        src: ImmediateRegisterMemorySegment::RM(accumulator),
+                        dest: RegisterMemorySegment::RM(addr),
                     }
                 } else {
                     MoveOp {
-                        src: MoveSource::RM(addr),
-                        dest: MoveDestination::RM(accumulator),
+                        src: ImmediateRegisterMemorySegment::RM(addr),
+                        dest: RegisterMemorySegment::RM(accumulator),
                     }
                 });
             }
@@ -918,7 +921,7 @@ impl Iterator for InstructionIterator {
                 let mode = byte2 >> 6;
                 let rm = byte2;
 
-                break Push(MoveDestination::RM(RegisterMemory::new_mod_rm(
+                break Push(RegisterMemorySegment::RM(RegisterMemory::new_mod_rm(
                     wflag,
                     mode,
                     rm,
@@ -931,12 +934,41 @@ impl Iterator for InstructionIterator {
                 let wflag = true;
                 let reg = Register::new(wflag, byte1);
 
-                break Push(MoveDestination::RM(RegisterMemory::Register(reg)));
+                break Push(RegisterMemorySegment::RM(RegisterMemory::Register(reg)));
             }
             // Push (Segment Register)
             else if opcode_cmp(byte1, 0b11100111, 0b00000110) {
                 let sr = SegmentRegister::new(byte1 >> 3);
-                break Push(MoveDestination::SegmentRegister(sr));
+                break Push(RegisterMemorySegment::SegmentRegister(sr));
+            }
+            // Pop (Register/memory)
+            else if opcode_cmp(byte1, 0b11111111, 0b10001111) {
+                let wflag = true;
+
+                let byte2 = instructions.next_byte();
+
+                let mode = byte2 >> 6;
+                let rm = byte2;
+
+                break Pop(RegisterMemorySegment::RM(RegisterMemory::new_mod_rm(
+                    wflag,
+                    mode,
+                    rm,
+                    self.segment_override.take(),
+                    instructions,
+                )));
+            }
+            // Pop (Register)
+            else if opcode_cmp(byte1, 0b11111000, 0b01011000) {
+                let wflag = true;
+                let reg = Register::new(wflag, byte1);
+
+                break Pop(RegisterMemorySegment::RM(RegisterMemory::Register(reg)));
+            }
+            // Pop (Segment Register)
+            else if opcode_cmp(byte1, 0b11100111, 0b00000111) {
+                let sr = SegmentRegister::new(byte1 >> 3);
+                break Pop(RegisterMemorySegment::SegmentRegister(sr));
             }
 
             // Match jump opcodes. Increment is relative to the next instruction, two bytes later
@@ -983,9 +1015,9 @@ fn main() -> std::io::Result<()> {
     let listing_path = part_one_tests.join(Path::new("listing_0042_completionist_decode"));
 
     // output
-    // let test_path = Path::new("input");
+    let test_path = Path::new("input");
 
-    let mut file = match File::open(&listing_path) {
+    let mut file = match File::open(&test_path) {
         Err(why) => panic!("couldn't open {}: {}", listing_path.display(), why),
         Ok(file) => file,
     };
