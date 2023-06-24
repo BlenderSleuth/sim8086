@@ -413,14 +413,14 @@ impl fmt::Display for Immediate {
     }
 }
 
-enum OperatorSource {
+enum ImmediateRegisterMemory {
     Immediate(Immediate),
     RM(RegisterMemory),
 }
 
-impl fmt::Display for OperatorSource {
+impl fmt::Display for ImmediateRegisterMemory {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use OperatorSource::*;
+        use ImmediateRegisterMemory::*;
         match self {
             Immediate(immediate) => write!(f, "{immediate}"),
             RM(rm) => write!(f, "{rm}"),
@@ -458,13 +458,46 @@ impl MathOp {
     }
 }
 
-// An operation from reg/mem or immediate to reg/mem
-struct RegisterMemoryOp {
-    dest: RegisterMemory,
-    src: OperatorSource,
+// An operation for reg/mem and reg operands
+struct RegisterMemoryRegisterOp {
+    rm: RegisterMemory,
+    reg: Register,
 }
 
-impl RegisterMemoryOp {
+impl RegisterMemoryRegisterOp {
+    // Register/memory with register to either instruction (Mod | Reg | R/M style)
+    fn new_reg_mem_with_reg(
+        wflag: bool,
+        segment_override: Option<SegmentRegister>,
+        instructions: &mut InstructionStream,
+    ) -> (RegisterMemory, Register) {
+        let byte = instructions.next_byte();
+
+        let mode_bits = byte >> 6;
+        let reg_bits = byte >> 3;
+        let rm_bits = byte;
+
+        let reg = Register::new(wflag, reg_bits);
+        let rm =
+            RegisterMemory::new_mod_rm(wflag, mode_bits, rm_bits, segment_override, instructions);
+        
+        (rm, reg)
+    }
+}
+
+impl fmt::Display for RegisterMemoryRegisterOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}, {}", self.reg, self.rm)
+    }
+}
+
+// An operation from reg/mem or immediate to reg/mem
+struct RegisterMemoryImmediateOp {
+    dest: RegisterMemory,
+    src: ImmediateRegisterMemory,
+}
+
+impl RegisterMemoryImmediateOp {
     // Register/memory with register to either instruction (Mod | Reg | R/M style)
     fn new_reg_mem_with_reg(
         dflag: bool,
@@ -472,25 +505,19 @@ impl RegisterMemoryOp {
         segment_override: Option<SegmentRegister>,
         instructions: &mut InstructionStream,
     ) -> Self {
-        let byte = instructions.next_byte();
 
-        let mode_bits = byte >> 6;
-        let reg_bits = byte >> 3;
-        let rm_bits = byte;
-
-        let reg = RegisterMemory::new_register(wflag, reg_bits);
-        let rm =
-            RegisterMemory::new_mod_rm(wflag, mode_bits, rm_bits, segment_override, instructions);
-
+        let (rm, reg) = RegisterMemoryRegisterOp::new_reg_mem_with_reg(wflag, segment_override, instructions);
+        let reg = RegisterMemory::Register(reg);
+        
         if dflag {
             Self {
                 dest: reg,
-                src: OperatorSource::RM(rm),
+                src: ImmediateRegisterMemory::RM(rm),
             }
         } else {
             Self {
                 dest: rm,
-                src: OperatorSource::RM(reg),
+                src: ImmediateRegisterMemory::RM(reg),
             }
         }
     }
@@ -513,7 +540,7 @@ impl RegisterMemoryOp {
 
         (
             Self {
-                src: OperatorSource::Immediate(Immediate::new(sflag, wflag, instructions)),
+                src: ImmediateRegisterMemory::Immediate(Immediate::new(sflag, wflag, instructions)),
                 dest: rm,
             },
             MathOp::new(op_bits),
@@ -521,7 +548,7 @@ impl RegisterMemoryOp {
     }
 }
 
-impl fmt::Display for RegisterMemoryOp {
+impl fmt::Display for RegisterMemoryImmediateOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}, {}", self.dest, self.src)
     }
@@ -533,12 +560,12 @@ enum ImmediateRegisterMemorySegment {
     SegmentRegister(SegmentRegister),
 }
 
-impl From<OperatorSource> for ImmediateRegisterMemorySegment {
-    fn from(src: OperatorSource) -> Self {
+impl From<ImmediateRegisterMemory> for ImmediateRegisterMemorySegment {
+    fn from(src: ImmediateRegisterMemory) -> Self {
         use ImmediateRegisterMemorySegment::*;
         match src {
-            OperatorSource::Immediate(value) => Immediate(value),
-            OperatorSource::RM(rm) => RM(rm),
+            ImmediateRegisterMemory::Immediate(value) => Immediate(value),
+            ImmediateRegisterMemory::RM(rm) => RM(rm),
         }
     }
 }
@@ -607,8 +634,8 @@ impl MoveOp {
     }
 }
 
-impl From<RegisterMemoryOp> for MoveOp {
-    fn from(op: RegisterMemoryOp) -> Self {
+impl From<RegisterMemoryImmediateOp> for MoveOp {
+    fn from(op: RegisterMemoryImmediateOp) -> Self {
         Self {
             dest: RegisterMemorySegment::RM(op.dest),
             src: op.src.into(),
@@ -628,15 +655,17 @@ enum Instruction {
     // Stack ops
     Push(RegisterMemorySegment),
     Pop(RegisterMemorySegment),
+    // Exchange
+    Xchg(RegisterMemoryRegisterOp),
     // Math ops
-    Add(RegisterMemoryOp),
-    Or(RegisterMemoryOp),
-    Adc(RegisterMemoryOp),
-    Sbb(RegisterMemoryOp),
-    And(RegisterMemoryOp),
-    Sub(RegisterMemoryOp),
-    Xor(RegisterMemoryOp),
-    Cmp(RegisterMemoryOp),
+    Add(RegisterMemoryImmediateOp),
+    Or(RegisterMemoryImmediateOp),
+    Adc(RegisterMemoryImmediateOp),
+    Sbb(RegisterMemoryImmediateOp),
+    And(RegisterMemoryImmediateOp),
+    Sub(RegisterMemoryImmediateOp),
+    Xor(RegisterMemoryImmediateOp),
+    Cmp(RegisterMemoryImmediateOp),
     // Jumps
     Je(i8),
     Jl(i8),
@@ -662,7 +691,7 @@ enum Instruction {
 }
 
 impl Instruction {
-    fn new_math_instruction(math_op: MathOp, rm_op: RegisterMemoryOp) -> Self {
+    fn new_math_instruction(math_op: MathOp, rm_op: RegisterMemoryImmediateOp) -> Self {
         use Instruction::*;
         match math_op {
             MathOp::Add => Add(rm_op),
@@ -685,6 +714,7 @@ impl fmt::Display for Instruction {
             // Todo(ben): conditionally use 'word' for rm
             Push(op) => write!(f, "push word {op}"),
             Pop(op) => write!(f, "pop word {op}"),
+            Xchg(op) => write!(f, "xchg {op}"),
             Add(op) => write!(f, "add {op}"),
             Or(op) => write!(f, "or {op}"),
             Adc(op) => write!(f, "adc {op}"),
@@ -795,7 +825,7 @@ impl Iterator for InstructionIterator {
                 let dflag = flag(byte1, 1);
                 let wflag = flag(byte1, 0);
 
-                let rm_op = RegisterMemoryOp::new_reg_mem_with_reg(
+                let rm_op = RegisterMemoryImmediateOp::new_reg_mem_with_reg(
                     dflag,
                     wflag,
                     self.segment_override.take(),
@@ -810,7 +840,7 @@ impl Iterator for InstructionIterator {
                 let wflag = flag(byte1, 0);
 
                 // Mov immediate instruction has different opcode, ignore math op
-                let (rm_op, _) = RegisterMemoryOp::new_immediate(
+                let (rm_op, _) = RegisterMemoryImmediateOp::new_immediate(
                     sflag,
                     wflag,
                     self.segment_override.take(),
@@ -873,7 +903,7 @@ impl Iterator for InstructionIterator {
                 let dflag = flag(byte1, 1);
                 let wflag = flag(byte1, 0);
 
-                let rm_op = RegisterMemoryOp::new_reg_mem_with_reg(
+                let rm_op = RegisterMemoryImmediateOp::new_reg_mem_with_reg(
                     dflag,
                     wflag,
                     self.segment_override.take(),
@@ -887,7 +917,7 @@ impl Iterator for InstructionIterator {
                 let sflag = flag(byte1, 1);
                 let wflag = flag(byte1, 0);
 
-                let (rm_op, math_op) = RegisterMemoryOp::new_immediate(
+                let (rm_op, math_op) = RegisterMemoryImmediateOp::new_immediate(
                     sflag,
                     wflag,
                     self.segment_override.take(),
@@ -905,9 +935,9 @@ impl Iterator for InstructionIterator {
                 let immediate = Immediate::new(sflag, wflag, instructions);
                 let accumulator = RegisterMemory::new_accumulator(wflag);
 
-                let rm_op = RegisterMemoryOp {
+                let rm_op = RegisterMemoryImmediateOp {
                     dest: accumulator,
-                    src: OperatorSource::Immediate(immediate),
+                    src: ImmediateRegisterMemory::Immediate(immediate),
                 };
 
                 break Instruction::new_math_instruction(math_op, rm_op);
@@ -970,6 +1000,24 @@ impl Iterator for InstructionIterator {
                 let sr = SegmentRegister::new(byte1 >> 3);
                 break Pop(RegisterMemorySegment::SegmentRegister(sr));
             }
+            // Xchg (Register/memory with register)
+            else if opcode_cmp(byte1, 0b11111110, 0b10000110) {
+                let wflag = flag(byte1, 0);
+
+                let (rm, reg) = RegisterMemoryRegisterOp::new_reg_mem_with_reg(
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                );
+                
+                break Xchg(RegisterMemoryRegisterOp { rm, reg });
+            }
+            // Xchg (Register with accumulator)
+            else if opcode_cmp(byte1, 0b11111000, 0b10010000) {
+                let wflag = true;
+                let rm = RegisterMemory::new_register(wflag, byte1);
+                break Xchg(RegisterMemoryRegisterOp { rm, reg: Register::AX });
+            }
 
             // Match jump opcodes. Increment is relative to the next instruction, two bytes later
             let increment = instructions.next_byte_signed() + 2;
@@ -1004,7 +1052,7 @@ fn main() -> std::io::Result<()> {
     let part_one_tests = Path::new("../../computer_enhance/perfaware/part1");
 
     // For testing / comparision
-    // nu: cargo run | save -f output.asm; nasm output.asm; fc output ..\..\computer_enhance\perfaware\part1\listing_0040_challenge_movs
+    // nu: nasm input.asm | cargo run | save -f output.asm; nasm output.asm; fc output ..\..\computer_enhance\perfaware\part1\listing_0040_challenge_movs
 
     // listing_0037_single_register_mov
     // listing_0038_many_register_mov
@@ -1012,13 +1060,13 @@ fn main() -> std::io::Result<()> {
     // listing_0040_challenge_movs
     // listing_0041_add_sub_cmp_jnz
     // listing_0042_completionist_decode
-    let listing_path = part_one_tests.join(Path::new("listing_0042_completionist_decode"));
+    let _listing_path = part_one_tests.join(Path::new("listing_0042_completionist_decode"));
 
     // output
-    let test_path = Path::new("input");
+    let _test_path = Path::new("input");
 
-    let mut file = match File::open(&test_path) {
-        Err(why) => panic!("couldn't open {}: {}", listing_path.display(), why),
+    let mut file = match File::open(&_test_path) {
+        Err(why) => panic!("couldn't open {}: {}", _test_path.display(), why),
         Ok(file) => file,
     };
 
