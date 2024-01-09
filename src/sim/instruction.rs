@@ -1,8 +1,8 @@
 use std::fmt::{self, Formatter};
 use std::vec::IntoIter;
 
-use super::register_memory::{RegisterMemorySegment, SegmentRegister, Immediate, ImmediateRegisterMemory, ImmediateRegisterMemorySegment, Register, RegisterMemory};
-use super::operations::{MoveOp, RegisterMemoryRegisterOp, RegisterMemoryImmediateOp, MathOp};
+use super::register_memory::{DataSize, UnsignedData, SignedData, RegisterMemorySegment, SegmentRegister, Immediate, ImmediateRegisterMemory, ImmediateRegisterMemorySegment, Register, RegisterMemory};
+use super::operations::{MoveOp, RegisterMemoryRegisterOp, RegisterMemoryImmediateOp, InPort, OutPort, MathOp, Port};
 
 pub enum Instruction {
     // Move
@@ -12,6 +12,9 @@ pub enum Instruction {
     Pop(RegisterMemorySegment),
     // Exchange
     Xchg(RegisterMemoryRegisterOp),
+    // I/O
+    In(InPort),
+    Out(OutPort),
     // Math ops
     Add(RegisterMemoryImmediateOp),
     Or(RegisterMemoryImmediateOp),
@@ -70,6 +73,8 @@ impl fmt::Display for Instruction {
             Push(op) => write!(f, "push word {op}"),
             Pop(op) => write!(f, "pop word {op}"),
             Xchg(op) => write!(f, "xchg {op}"),
+            In(op) => write!(f, "in {op}"),
+            Out(op) => write!(f, "out {op}"),
             Add(op) => write!(f, "add {op}"),
             Or(op) => write!(f, "or {op}"),
             Adc(op) => write!(f, "adc {op}"),
@@ -130,19 +135,24 @@ impl InstructionStream {
         self.next_word() as i16
     }
 
-    pub fn next_data(&mut self, wflag: bool) -> u16 {
-        if wflag {
-            self.next_word()
-        } else {
-            self.next_byte() as u16
+    pub fn next_direct_address(&mut self, data_size: DataSize) -> u16 {
+        match data_size {
+            DataSize::Byte => self.next_byte() as u16,
+            DataSize::Word => self.next_word(),
         }
     }
 
-    pub fn next_data_signed(&mut self, wflag: bool) -> i16 {
-        if wflag {
-            self.next_word_signed()
-        } else {
-            self.next_byte_signed() as i16
+    pub fn next_data_unsigned(&mut self, data_size: DataSize) -> UnsignedData {
+        match data_size {
+            DataSize::Byte => UnsignedData::Byte(self.next_byte()),
+            DataSize::Word => UnsignedData::Word(self.next_word()),
+        }
+    }
+    
+    pub fn next_data_signed(&mut self, data_size: DataSize) -> SignedData {
+        match data_size {
+            DataSize::Byte => SignedData::Byte(self.next_byte_signed()),
+            DataSize::Word => SignedData::Word(self.next_word_signed()),
         }
     }
 }
@@ -189,7 +199,7 @@ impl Iterator for InstructionIterator {
             // Mov (Register/memory to/from register)
             if opcode_cmp(byte1, 0b11111100, 0b10001000) {
                 let dflag = flag(byte1, 1);
-                let wflag = flag(byte1, 0);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
 
                 let rm_op = RegisterMemoryImmediateOp::new_reg_mem_with_reg(
                     dflag,
@@ -203,7 +213,7 @@ impl Iterator for InstructionIterator {
             // Mov (Immediate to register/memory)
             else if opcode_cmp(byte1, 0b11111110, 0b11000110) {
                 let sflag = false;
-                let wflag = flag(byte1, 0);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
 
                 // Mov immediate instruction has different opcode, ignore math op
                 let (rm_op, _) = RegisterMemoryImmediateOp::new_immediate(
@@ -218,22 +228,22 @@ impl Iterator for InstructionIterator {
             // Mov (Immediate to register)
             else if opcode_cmp(byte1, 0b11110000, 0b10110000) {
                 let sflag = false;
-                let wflag = flag(byte1, 3);
+                let data_size = DataSize::from_wflag(flag(byte1, 3));
                 let reg_bits = byte1;
-                let reg = Register::new(wflag, reg_bits);
+                let reg = Register::new(data_size, reg_bits);
 
                 break Mov(MoveOp {
-                    src: ImmediateRegisterMemorySegment::Immediate(Immediate::new(sflag, wflag, instructions)),
+                    src: ImmediateRegisterMemorySegment::Immediate(Immediate::new(sflag, data_size, instructions)),
                     dest: RegisterMemorySegment::RM(RegisterMemory::Register(reg)),
                 });
             }
             // Mov (Memory to accumulator / Accumulator to memory)
             else if opcode_cmp(byte1, 0b11111100, 0b10100000) {
                 let dflag = flag(byte1, 1);
-                let wflag = flag(byte1, 0);
+                let data_size = DataSize::from_wflag(flag(byte1, 0));
 
-                let addr = RegisterMemory::DirectAddress(instructions.next_data(wflag));
-                let accumulator = RegisterMemory::new_accumulator(wflag);
+                let addr = RegisterMemory::DirectAddress(instructions.next_direct_address(data_size));
+                let accumulator = RegisterMemory::new_accumulator(data_size);
 
                 break Mov(if dflag {
                     MoveOp {
@@ -267,7 +277,7 @@ impl Iterator for InstructionIterator {
             else if opcode_cmp(byte1, 0b11000100, 0b00000000) {
                 let math_op = MathOp::new(byte1 >> 3);
                 let dflag = flag(byte1, 1);
-                let wflag = flag(byte1, 0);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
 
                 let rm_op = RegisterMemoryImmediateOp::new_reg_mem_with_reg(
                     dflag,
@@ -281,7 +291,7 @@ impl Iterator for InstructionIterator {
             // MathOp (Immediate to register/memory)
             else if opcode_cmp(byte1, 0b11111100, 0b10000000) {
                 let sflag = flag(byte1, 1);
-                let wflag = flag(byte1, 0);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
 
                 let (rm_op, math_op) = RegisterMemoryImmediateOp::new_immediate(
                     sflag,
@@ -296,10 +306,10 @@ impl Iterator for InstructionIterator {
             else if opcode_cmp(byte1, 0b11000110, 0b00000100) {
                 let math_op = MathOp::new(byte1 >> 3);
                 let sflag = false;
-                let wflag = flag(byte1, 0);
+                let data_size = DataSize::from_wflag(flag(byte1, 0));
 
-                let immediate = Immediate::new(sflag, wflag, instructions);
-                let accumulator = RegisterMemory::new_accumulator(wflag);
+                let immediate = Immediate::new(sflag, data_size, instructions);
+                let accumulator = RegisterMemory::new_accumulator(data_size);
 
                 let rm_op = RegisterMemoryImmediateOp {
                     dest: accumulator,
@@ -310,7 +320,7 @@ impl Iterator for InstructionIterator {
             }
             // Push (Register/memory)
             else if opcode_cmp(byte1, 0b11111111, 0b11111111) {
-                let wflag = true;
+                let wflag = DataSize::Word;
 
                 let byte2 = instructions.next_byte();
 
@@ -327,7 +337,7 @@ impl Iterator for InstructionIterator {
             }
             // Push (Register)
             else if opcode_cmp(byte1, 0b11111000, 0b01010000) {
-                let wflag = true;
+                let wflag = DataSize::Word;
                 let reg = Register::new(wflag, byte1);
 
                 break Push(RegisterMemorySegment::RM(RegisterMemory::Register(reg)));
@@ -339,7 +349,7 @@ impl Iterator for InstructionIterator {
             }
             // Pop (Register/memory)
             else if opcode_cmp(byte1, 0b11111111, 0b10001111) {
-                let wflag = true;
+                let wflag = DataSize::Word;
 
                 let byte2 = instructions.next_byte();
 
@@ -356,7 +366,7 @@ impl Iterator for InstructionIterator {
             }
             // Pop (Register)
             else if opcode_cmp(byte1, 0b11111000, 0b01011000) {
-                let wflag = true;
+                let wflag = DataSize::Word;
                 let reg = Register::new(wflag, byte1);
 
                 break Pop(RegisterMemorySegment::RM(RegisterMemory::Register(reg)));
@@ -368,7 +378,7 @@ impl Iterator for InstructionIterator {
             }
             // Xchg (Register/memory with register)
             else if opcode_cmp(byte1, 0b11111110, 0b10000110) {
-                let wflag = flag(byte1, 0);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
 
                 let (rm, reg) = RegisterMemoryRegisterOp::new_reg_mem_with_reg(
                     wflag,
@@ -380,9 +390,29 @@ impl Iterator for InstructionIterator {
             }
             // Xchg (Register with accumulator)
             else if opcode_cmp(byte1, 0b11111000, 0b10010000) {
-                let wflag = true;
+                let wflag = DataSize::Word;
                 let rm = RegisterMemory::new_register(wflag, byte1);
                 break Xchg(RegisterMemoryRegisterOp { rm, reg: Register::AX });
+            }
+            // In/out (fixed/variable port)
+            else if opcode_cmp(byte1, 0b11110100, 0b11100100) {
+                let data_size = DataSize::from_wflag(flag(byte1, 0));
+                let out = flag(byte1, 1);
+                let variable = flag(byte1, 3);
+
+                break if out {
+                    if variable {
+                        Out(OutPort(Port::Variable(data_size)))
+                    } else {
+                        Out(OutPort(Port::Fixed(data_size.with_unsigned_data(instructions.next_byte() as u16))))
+                    }
+                } else {
+                    if variable {
+                        In(InPort(Port::Variable(data_size)))
+                    } else {
+                        In(InPort(Port::Fixed(data_size.with_unsigned_data(instructions.next_byte() as u16))))
+                    }
+                }
             }
 
             // Match jump opcodes. Increment is relative to the next instruction, two bytes later

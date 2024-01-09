@@ -8,8 +8,8 @@ use std::io::prelude::*;
 use std::path::Path;
 
 fn main() -> std::io::Result<()> {
-    // For testing / comparision
-    // nu: nasm input.asm | cargo run | save -f output.asm; nasm output.asm; fc output ..\..\computer_enhance\perfaware\part1\listing_0040_challenge_movs
+    // For testing / comparison
+    // nu: nasm input.asm | cargo run | save -f output.asm; nasm output.asm; fc input output
 
     let part_one_tests = Path::new("../../computer_enhance/perfaware/part1");
     // listing_0037_single_register_mov

@@ -41,7 +41,7 @@ pub struct RegisterMemoryRegisterOp {
 impl RegisterMemoryRegisterOp {
     // Register/memory with register to either instruction (Mod | Reg | R/M style)
     pub fn new_reg_mem_with_reg(
-        wflag: bool,
+        wflag: DataSize,
         segment_override: Option<SegmentRegister>,
         instructions: &mut InstructionStream,
     ) -> (RegisterMemory, Register) {
@@ -65,6 +65,7 @@ impl fmt::Display for RegisterMemoryRegisterOp {
     }
 }
 
+
 // An operation from reg/mem or immediate to reg/mem
 pub struct RegisterMemoryImmediateOp {
     pub dest: RegisterMemory,
@@ -75,7 +76,7 @@ impl RegisterMemoryImmediateOp {
     // Register/memory with register to either instruction (Mod | Reg | R/M style)
     pub fn new_reg_mem_with_reg(
         dflag: bool,
-        wflag: bool,
+        wflag: DataSize,
         segment_override: Option<SegmentRegister>,
         instructions: &mut InstructionStream,
     ) -> Self {
@@ -99,7 +100,7 @@ impl RegisterMemoryImmediateOp {
     // From immediate to register/memory, returning the math op
     pub fn new_immediate(
         sflag: bool,
-        wflag: bool,
+        data_size: DataSize,
         segment_override: Option<SegmentRegister>,
         instructions: &mut InstructionStream,
     ) -> (Self, MathOp) {
@@ -110,11 +111,11 @@ impl RegisterMemoryImmediateOp {
         let rm_bits = byte;
 
         let rm =
-            RegisterMemory::new_mod_rm(wflag, mode_bits, rm_bits, segment_override, instructions);
+            RegisterMemory::new_mod_rm(data_size, mode_bits, rm_bits, segment_override, instructions);
 
         (
             Self {
-                src: ImmediateRegisterMemory::Immediate(Immediate::new(sflag, wflag, instructions)),
+                src: ImmediateRegisterMemory::Immediate(Immediate::new(sflag, data_size, instructions)),
                 dest: rm,
             },
             MathOp::new(op_bits),
@@ -128,6 +129,7 @@ impl fmt::Display for RegisterMemoryImmediateOp {
     }
 }
 
+
 pub struct MoveOp {
     pub dest: RegisterMemorySegment,
     pub src: ImmediateRegisterMemorySegment,
@@ -140,7 +142,7 @@ impl MoveOp {
         instructions: &mut InstructionStream,
     ) -> Self {
         // Segment registers are always wide
-        let wflag = true;
+        let wflag = DataSize::Word;
 
         let byte = instructions.next_byte();
 
@@ -181,3 +183,34 @@ impl fmt::Display for MoveOp {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Port {
+    Fixed(UnsignedData),
+    Variable(DataSize),
+}
+
+#[derive(Clone, Copy)]
+pub struct InPort(pub Port);
+
+impl fmt::Display for InPort {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use Port::*;
+        match self.0 {
+            Fixed(data) => write!(f, "{}, {data}", Register::new_accumulator(data.get_size())),
+            Variable(data_size) => write!(f, "{}, {}", Register::new_accumulator(data_size), Register::new_d(DataSize::Word)),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct OutPort(pub Port);
+
+impl fmt::Display for OutPort {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use Port::*;
+        match self.0 {
+            Fixed(data) => write!(f, "{data}, {}", Register::new_accumulator(data.get_size())),
+            Variable(data_size) => write!(f, "{}, {}", Register::new_d(DataSize::Word), Register::new_accumulator(data_size)),
+        }
+    }
+}

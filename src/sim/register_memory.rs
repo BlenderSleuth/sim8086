@@ -2,7 +2,92 @@ use std::fmt::{self, Formatter};
 use super::instruction::InstructionStream;
 use super::address_displacement::AddressDisplacement;
 
-// REG or R/M field
+#[derive(Clone, Copy)]
+pub enum DataSize {
+    Byte,
+    Word,
+}
+
+pub trait Data {
+    fn get_size(&self) -> DataSize;
+}
+
+#[derive(Clone, Copy)]
+pub enum SignedData {
+    Byte(i8),
+    Word(i16),
+}
+impl Data for SignedData {
+    fn get_size(&self) -> DataSize {
+        match self {
+            SignedData::Byte(_) => DataSize::Byte,
+            SignedData::Word(_) => DataSize::Word
+        }
+    }
+}
+impl fmt::Display for SignedData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SignedData::Byte(value) => write!(f, "{value}"),
+            SignedData::Word(value) => write!(f, "{value}"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum UnsignedData {
+    Byte(u8),
+    Word(u16),
+}
+impl Data for UnsignedData {
+    fn get_size(&self) -> DataSize {
+        match self {
+            UnsignedData::Byte(_) => DataSize::Byte,
+            UnsignedData::Word(_) => DataSize::Word
+        }
+    }
+}
+impl fmt::Display for UnsignedData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            UnsignedData::Byte(value) => write!(f, "{value}"),
+            UnsignedData::Word(value) => write!(f, "{value}"),
+        }
+    }
+}
+
+impl DataSize {
+    pub fn from_wflag(wflag: bool) -> Self {
+        if wflag {
+            Self::Word
+        } else {
+            Self::Byte
+        }
+    }
+
+    pub fn with_signed_data(&self, data: i16) -> SignedData {
+        match self {
+            Self::Byte => SignedData::Byte(data as i8),
+            Self::Word => SignedData::Word(data)
+        }
+    }
+    pub fn with_unsigned_data(&self, data: u16) -> UnsignedData {
+        match self {
+            Self::Byte => UnsignedData::Byte(data as u8),
+            Self::Word => UnsignedData::Word(data)
+        }
+    }
+}
+
+impl SignedData {
+    pub fn sign_extend(self) -> Self {
+        match self {
+            Self::Byte(data) => Self::Word(data as i16),
+            Self::Word(_) => self
+        }
+    }
+}
+
 pub enum Register {
     AX,
     AH,
@@ -23,31 +108,62 @@ pub enum Register {
 }
 
 impl Register {
+    // Gets the accumulator register
+    pub fn new_accumulator(data_size: DataSize) -> Self {
+        Self::new_a(data_size)
+    }
+    
+    pub fn new_a(data_size: DataSize) -> Self {
+        match data_size {
+            DataSize::Byte => Register::AL,
+            DataSize::Word => Register::AX,
+        }
+    }
+    
+    pub fn new_b(data_size: DataSize) -> Self {
+        match data_size {
+            DataSize::Byte => Register::BL,
+            DataSize::Word => Register::BX,
+        }
+    }
+    pub fn new_c(data_size: DataSize) -> Self {
+        match data_size {
+            DataSize::Byte => Register::CL,
+            DataSize::Word => Register::CX,
+        }
+    }
+    pub fn new_d(data_size: DataSize) -> Self {
+        match data_size {
+            DataSize::Byte => Register::DL,
+            DataSize::Word => Register::DX,
+        }
+    }
+    
     // REG is truncated to 3 bits
-    pub fn new(wflag: bool, reg: u8) -> Self {
+    pub fn new(data_size: DataSize, reg: u8) -> Self {
         let reg = reg & 0b111;
-        Self::new_checked(wflag, reg)
+        Self::new_checked(data_size, reg)
     }
 
-    pub fn new_checked(wflag: bool, reg: u8) -> Self {
+    pub fn new_checked(data_size: DataSize, reg: u8) -> Self {
         assert!(reg <= 0b111);
-        match (reg, wflag) {
-            (0b000, false) => Self::AL,
-            (0b000, true) => Self::AX,
-            (0b001, false) => Self::CL,
-            (0b001, true) => Self::CX,
-            (0b010, false) => Self::DL,
-            (0b010, true) => Self::DX,
-            (0b011, false) => Self::BL,
-            (0b011, true) => Self::BX,
-            (0b100, false) => Self::AH,
-            (0b100, true) => Self::SP,
-            (0b101, false) => Self::CH,
-            (0b101, true) => Self::BP,
-            (0b110, false) => Self::DH,
-            (0b110, true) => Self::SI,
-            (0b111, false) => Self::BH,
-            (0b111, true) => Self::DI,
+        match (reg, data_size) {
+            (0b000, DataSize::Byte) => Self::AL,
+            (0b000, DataSize::Word) => Self::AX,
+            (0b001, DataSize::Byte) => Self::CL,
+            (0b001, DataSize::Word) => Self::CX,
+            (0b010, DataSize::Byte) => Self::DL,
+            (0b010, DataSize::Word) => Self::DX,
+            (0b011, DataSize::Byte) => Self::BL,
+            (0b011, DataSize::Word) => Self::BX,
+            (0b100, DataSize::Byte) => Self::AH,
+            (0b100, DataSize::Word) => Self::SP,
+            (0b101, DataSize::Byte) => Self::CH,
+            (0b101, DataSize::Word) => Self::BP,
+            (0b110, DataSize::Byte) => Self::DH,
+            (0b110, DataSize::Word) => Self::SI,
+            (0b111, DataSize::Byte) => Self::BH,
+            (0b111, DataSize::Word) => Self::DI,
             _ => unreachable!(),
         }
     }
@@ -80,6 +196,7 @@ impl fmt::Display for Register {
         )
     }
 }
+
 
 pub enum SegmentRegister {
     ES,
@@ -125,24 +242,8 @@ impl fmt::Display for SegmentRegister {
     }
 }
 
-pub struct AddressCalculation {
-    rm: RegDisplacement,
-    displacement: AddressDisplacement,
-    segment_override: Option<SegmentRegister>,
-}
 
-impl fmt::Display for AddressCalculation {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use AddressDisplacement::*;
-        match self.displacement {
-            Zero => write!(f, "[{}]", self.rm),
-            Byte(_) | Word(_) => write!(f, "[{} {}]", self.rm, self.displacement),
-        }
-    }
-}
-
-// R/M field
-pub enum RegDisplacement {
+pub enum AddressRegisterCalculation {
     BXpSI,
     BXpDI,
     BPpSI,
@@ -153,7 +254,7 @@ pub enum RegDisplacement {
     BX,
 }
 
-impl RegDisplacement {
+impl AddressRegisterCalculation {
     // R/M is truncated to 3 bits
     pub fn new(rm: u8) -> Self {
         let rm = rm & 0b111;
@@ -161,7 +262,7 @@ impl RegDisplacement {
     }
 
     fn new_checked(rm: u8) -> Self {
-        use RegDisplacement::*;
+        use AddressRegisterCalculation::*;
 
         assert!(rm <= 0b111);
 
@@ -179,9 +280,9 @@ impl RegDisplacement {
     }
 }
 
-impl fmt::Display for RegDisplacement {
+impl fmt::Display for AddressRegisterCalculation {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use RegDisplacement::*;
+        use AddressRegisterCalculation::*;
 
         write!(
             f,
@@ -200,21 +301,38 @@ impl fmt::Display for RegDisplacement {
     }
 }
 
+pub struct AddressDisplacementCalculation {
+    rm: AddressRegisterCalculation,
+    displacement: AddressDisplacement,
+    segment_override: Option<SegmentRegister>,
+}
+
+impl fmt::Display for AddressDisplacementCalculation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use AddressDisplacement::*;
+        match self.displacement {
+            Zero => write!(f, "[{}]", self.rm),
+            Byte(_) | Word(_) => write!(f, "[{} {}]", self.rm, self.displacement),
+        }
+    }
+}
+
+
 pub enum RegisterMemory {
     DirectAddress(u16),
-    Memory(AddressCalculation),
+    Memory(AddressDisplacementCalculation),
     Register(Register),
 }
 
 impl RegisterMemory {
     // Gets the accumulator register
-    pub fn new_accumulator(wflag: bool) -> Self {
-        RegisterMemory::Register(if wflag { Register::AX } else { Register::AL })
+    pub fn new_accumulator(data_size: DataSize) -> Self {
+        RegisterMemory::Register(Register::new_accumulator(data_size))
     }
 
     // R/M is truncated to 3 bits, mode is truncated to 2 bits
     pub fn new(
-        wflag: bool,
+        wflag: DataSize,
         rm: u8,
         mode: u8,
         displacement: AddressDisplacement,
@@ -225,13 +343,13 @@ impl RegisterMemory {
         Self::new_checked(wflag, rm, mode, displacement, segment_override)
     }
 
-    pub fn new_register(wflag: bool, reg: u8) -> Self {
+    pub fn new_register(wflag: DataSize, reg: u8) -> Self {
         RegisterMemory::Register(Register::new(wflag, reg))
     }
 
     // R/M is truncated to 3 bits, mode is truncated to 2 bits
     pub fn new_mod_rm(
-        wflag: bool,
+        wflag: DataSize,
         mode: u8,
         rm: u8,
         segment_override: Option<SegmentRegister>,
@@ -258,7 +376,7 @@ impl RegisterMemory {
     }
 
     pub fn new_checked(
-        wflag: bool,
+        wflag: DataSize,
         rm: u8,
         mode: u8,
         displacement: AddressDisplacement,
@@ -269,8 +387,8 @@ impl RegisterMemory {
 
         match (rm, mode) {
             (0b110, 0b00) => RegisterMemory::DirectAddress(displacement.to_unsigned()),
-            (_, 0b00 | 0b10 | 0b01) => RegisterMemory::Memory(AddressCalculation {
-                rm: RegDisplacement::new_checked(rm),
+            (_, 0b00 | 0b10 | 0b01) => RegisterMemory::Memory(AddressDisplacementCalculation {
+                rm: AddressRegisterCalculation::new_checked(rm),
                 displacement,
                 segment_override,
             }),
@@ -295,35 +413,46 @@ impl fmt::Display for RegisterMemory {
     }
 }
 
-pub enum Immediate {
-    Byte(i8),
-    Word(i16),
+
+pub enum RegisterMemorySegment {
+    RM(RegisterMemory),
+    SegmentRegister(SegmentRegister),
 }
 
-impl Immediate {
-    pub fn new(sflag: bool, wflag: bool, instructions: &mut InstructionStream) -> Self {
-        if wflag {
-            if sflag {
-                // Sign extend a byte to a word
-                Immediate::Word(instructions.next_byte_signed() as i16)
-            } else {
-                Immediate::Word(instructions.next_word_signed())
-            }
-        } else {
-            Immediate::Byte(instructions.next_byte_signed())
+impl fmt::Display for RegisterMemorySegment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use RegisterMemorySegment::*;
+        match self {
+            RM(rm) => write!(f, "{rm}"),
+            SegmentRegister(segment) => write!(f, "{segment}"),
         }
+    }
+}
+
+
+pub struct Immediate(SignedData);
+
+impl Immediate {
+    pub fn new(sflag: bool, data_size: DataSize, instructions: &mut InstructionStream) -> Self {
+        let signed_data = instructions.next_data_signed(data_size);
+
+        Immediate(if sflag {
+            signed_data.sign_extend()
+        } else {
+            signed_data
+        })
     }
 }
 
 impl fmt::Display for Immediate {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use Immediate::*;
-        match self {
-            Byte(value) => write!(f, "byte {value}"),
-            Word(value) => write!(f, "word {value}"),
+        match self.0 {
+            SignedData::Byte(value) => write!(f, "byte {value}"),
+            SignedData::Word(value) => write!(f, "word {value}"),
         }
     }
 }
+
 
 pub enum ImmediateRegisterMemory {
     Immediate(Immediate),
@@ -339,6 +468,7 @@ impl fmt::Display for ImmediateRegisterMemory {
         }
     }
 }
+
 
 pub enum ImmediateRegisterMemorySegment {
     Immediate(Immediate),
@@ -361,21 +491,6 @@ impl fmt::Display for ImmediateRegisterMemorySegment {
         use ImmediateRegisterMemorySegment::*;
         match self {
             Immediate(immediate) => write!(f, "{immediate}"),
-            RM(rm) => write!(f, "{rm}"),
-            SegmentRegister(segment) => write!(f, "{segment}"),
-        }
-    }
-}
-
-pub enum RegisterMemorySegment {
-    RM(RegisterMemory),
-    SegmentRegister(SegmentRegister),
-}
-
-impl fmt::Display for RegisterMemorySegment {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        use RegisterMemorySegment::*;
-        match self {
             RM(rm) => write!(f, "{rm}"),
             SegmentRegister(segment) => write!(f, "{segment}"),
         }
