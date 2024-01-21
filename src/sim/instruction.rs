@@ -15,6 +15,8 @@ pub enum Instruction {
     // I/O
     In(InPort),
     Out(OutPort),
+    // Xlat
+    Xlat,
     // Math ops
     Add(RegisterMemoryImmediateOp),
     Or(RegisterMemoryImmediateOp),
@@ -75,6 +77,7 @@ impl fmt::Display for Instruction {
             Xchg(op) => write!(f, "xchg {op}"),
             In(op) => write!(f, "in {op}"),
             Out(op) => write!(f, "out {op}"),
+            Xlat => write!(f, "xlat"),
             Add(op) => write!(f, "add {op}"),
             Or(op) => write!(f, "or {op}"),
             Adc(op) => write!(f, "adc {op}"),
@@ -413,6 +416,9 @@ impl Iterator for InstructionIterator {
                         In(InPort(Port::Fixed(data_size.with_unsigned_data(instructions.next_byte() as u16))))
                     }
                 }
+            }
+            else if opcode_cmp(byte1, 0b11111111, 0b11010111) {
+                break Xlat;
             }
 
             // Match jump opcodes. Increment is relative to the next instruction, two bytes later
