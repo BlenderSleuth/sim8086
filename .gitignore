@@ -16,8 +16,10 @@ target/
 # asm and bin in/outputs
 **/output
 **/output.asm
+**/output.txt
 **/input
 **/input.asm
+**/input.txt
 
 # IDE configs
 .vscode/

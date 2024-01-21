@@ -17,6 +17,15 @@ pub enum SignedData {
     Byte(i8),
     Word(i16),
 }
+
+impl SignedData {
+    pub fn get_data(&self) -> u16 {
+        match *self { 
+            SignedData::Byte(data) => data as u16,
+            SignedData::Word(data) => data as u16,
+        } 
+    }
+}
 impl Data for SignedData {
     fn get_size(&self) -> DataSize {
         match self {
@@ -88,6 +97,14 @@ impl SignedData {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum RegisterType {
+    Whole,
+    High,
+    Low,
+}
+
+#[derive(Clone, Copy)]
 pub enum Register {
     AX,
     AH,
@@ -167,6 +184,38 @@ impl Register {
             _ => unreachable!(),
         }
     }
+
+    pub fn to_whole(self) -> Register {
+        match self {
+            Register::AH | Register::AL => Register::AX,
+            Register::BH | Register::BL => Register::BX,
+            Register::CH | Register::CL => Register::CX,
+            Register::DH | Register::DL => Register::DX,
+            _ => self,
+        }
+    }
+    
+    pub fn get_index(&self) -> usize {
+        match self {
+            Register::AX | Register::AH | Register::AL => 0,
+            Register::BX | Register::BH | Register::BL => 1,
+            Register::CX | Register::CH | Register::CL => 2,
+            Register::DX | Register::DH | Register::DL=> 3,
+            Register::SP => 4,
+            Register::BP => 5,
+            Register::SI => 6,
+            Register::DI => 7,
+        }
+    }
+    
+    pub fn get_type(&self) -> RegisterType {
+        match self {
+            Register::AX | Register::BX | Register::CX | Register::DX | 
+            Register::SP | Register::BP | Register::SI | Register::DI => RegisterType::Whole,
+            Register::AH | Register::BH | Register::CH | Register::DH => RegisterType::High,
+            Register::AL | Register::BL | Register::CL | Register::DL => RegisterType::Low
+        }
+    }
 }
 
 impl fmt::Display for Register {
@@ -197,7 +246,7 @@ impl fmt::Display for Register {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub enum SegmentRegister {
     ES,
     CS,
@@ -224,6 +273,15 @@ impl SegmentRegister {
             _ => unreachable!(),
         }
     }
+    
+    pub fn get_index(&self) -> usize {
+        match self { 
+            Self::ES => 0,
+            Self::CS => 1,
+            Self::SS => 2,
+            Self::DS => 3,
+        } 
+    }
 }
 
 impl fmt::Display for SegmentRegister {
@@ -242,7 +300,7 @@ impl fmt::Display for SegmentRegister {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub enum AddressRegisterCalculation {
     BXpSI,
     BXpDI,
@@ -442,6 +500,10 @@ impl Immediate {
             signed_data
         })
     }
+
+    pub fn get_data(&self) -> u16 {
+        self.0.get_data()
+    }
 }
 
 impl fmt::Display for Immediate {
@@ -494,5 +556,63 @@ impl fmt::Display for ImmediateRegisterMemorySegment {
             RM(rm) => write!(f, "{rm}"),
             SegmentRegister(segment) => write!(f, "{segment}"),
         }
+    }
+}
+
+pub struct RegisterStorage {
+    storage: [u16; 8],
+    segment_storage: [u16; 4],
+}
+
+impl RegisterStorage {
+    pub fn new() -> Self {
+        Self {
+            storage: [0; 8],
+            segment_storage: [0; 4],
+        }
+    }
+    
+    pub fn read_register(&self, register: Register) -> u16 {
+        let data = self.storage[register.get_index()];
+        match register.get_type() {
+            RegisterType::Whole => data,
+            RegisterType::High => data >> 8,
+            RegisterType::Low => data & 0x00ffu16,
+        }
+    }
+
+    // Returns old value
+    pub fn write_register(&mut self, register: Register, value: u16) -> u16 {
+        let index = register.get_index();
+        let data = &mut self.storage[index];
+        let old_value = *data;
+        
+        match register.get_type() {
+            RegisterType::Whole => *data = value,
+            RegisterType::High => {
+                *data &= 0x00ffu16;
+                *data |= value << 8;
+            },
+            RegisterType::Low => {
+                *data &= 0xff00u16;
+                *data |= value & 0x00ffu16;
+            },
+        };
+        
+        old_value
+    }
+
+    pub fn read_segment_register(&self, register: SegmentRegister) -> u16 {
+        self.segment_storage[register.get_index()]
+    }
+    
+    // Returns old value
+    pub fn write_segment_register(&mut self, register: SegmentRegister, value: u16) -> u16 {
+        let index = register.get_index();
+        let old_value = self.segment_storage[index];
+        
+        self.segment_storage[index] = value;
+        
+        old_value
     }
 }
