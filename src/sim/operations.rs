@@ -2,6 +2,7 @@ use std::fmt::{self, Formatter};
 use super::register_memory::*;
 use super::instruction::InstructionStream;
 
+#[derive(Clone, Copy)]
 pub enum MathOp {
     Add,
     Or,
@@ -32,6 +33,7 @@ impl MathOp {
     }
 }
 
+#[derive(Clone, Copy)]
 // An operation for reg/mem and reg operands
 pub struct RegisterMemoryRegisterOp {
     pub rm: RegisterMemory,
@@ -67,6 +69,7 @@ impl fmt::Display for RegisterMemoryRegisterOp {
 
 
 // An operation from reg/mem or immediate to reg/mem
+#[derive(Clone, Copy)]
 pub struct RegisterMemoryImmediateOp {
     pub dest: RegisterMemory,
     pub src: ImmediateRegisterMemory,
@@ -129,7 +132,7 @@ impl fmt::Display for RegisterMemoryImmediateOp {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub struct MoveOp {
     pub dest: RegisterMemorySegment,
     pub src: ImmediateRegisterMemorySegment,

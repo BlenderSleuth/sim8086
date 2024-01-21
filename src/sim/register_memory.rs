@@ -359,6 +359,7 @@ impl fmt::Display for AddressRegisterCalculation {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct AddressDisplacementCalculation {
     rm: AddressRegisterCalculation,
     displacement: AddressDisplacement,
@@ -375,7 +376,7 @@ impl fmt::Display for AddressDisplacementCalculation {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub enum RegisterMemory {
     DirectAddress(u16),
     Memory(AddressDisplacementCalculation),
@@ -471,7 +472,7 @@ impl fmt::Display for RegisterMemory {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub enum RegisterMemorySegment {
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
@@ -487,7 +488,7 @@ impl fmt::Display for RegisterMemorySegment {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub struct Immediate(SignedData);
 
 impl Immediate {
@@ -515,7 +516,7 @@ impl fmt::Display for Immediate {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub enum ImmediateRegisterMemory {
     Immediate(Immediate),
     RM(RegisterMemory),
@@ -531,7 +532,7 @@ impl fmt::Display for ImmediateRegisterMemory {
     }
 }
 
-
+#[derive(Clone, Copy)]
 pub enum ImmediateRegisterMemorySegment {
     Immediate(Immediate),
     RM(RegisterMemory),

@@ -1,7 +1,7 @@
 use std::fmt::{self, Formatter};
 use std::num::{NonZeroI16, NonZeroI8};
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum AddressDisplacement {
     Zero,
     Byte(NonZeroI8),
