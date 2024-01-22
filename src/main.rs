@@ -1,13 +1,14 @@
 #![allow(dead_code)]
 
 mod sim;
-use sim::InstructionIterator;
-use sim::simulation::Simulation;
+use sim::{InstructionDecoder};
+use sim::simulation::Simulator;
 
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 use std::env;
+
 
 fn main() -> std::io::Result<()> {
     // For decoder testing / comparison
@@ -19,7 +20,7 @@ fn main() -> std::io::Result<()> {
     // nasm input.asm | cargo run -- --exec | save -f output.txt
     
     let args: Vec<String> = env::args().collect();
-    let exec = args.len() > 1 && args[1] == "--exec";
+    let exec = args.contains(&"--exec".to_owned());
     
     let part_one_tests = Path::new("../../computer_enhance/perfaware/part1");
     // listing_0037_single_register_mov
@@ -40,21 +41,27 @@ fn main() -> std::io::Result<()> {
     let mut instructions = Vec::<u8>::new();
     file.read_to_end(&mut instructions)?;
     
-    
-    let mut simulation = Simulation::new();
+    let mut decoder = InstructionDecoder::new(&mut instructions);
+    let mut simulation = Simulator::new();
+    let mut ip = 0;
+    let mut old_ip = 0;
     
     if !exec {
         println!("bits 16");
     }
-
-    for instruction in InstructionIterator::new(instructions) {
+    
+    while let Some(instruction) = decoder.decode(&mut ip) {
         print!("{instruction}");
         
         // simulate
         if exec {
-            let sim_result = simulation.simulate(instruction);
-            println!(" ; {sim_result}")
+            let sim_result = simulation.simulate(instruction, &mut ip);
+            print!(" ; ip:{old_ip:#0x}->{ip:#0x} {sim_result}")
         }
+        
+        println!();
+
+        old_ip = ip;
     }
     
     if exec {

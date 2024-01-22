@@ -2,6 +2,6 @@ pub mod address_displacement;
 pub mod register_memory;
 pub mod operations;
 pub mod instruction;
-pub  mod simulation;
+pub mod simulation;
 
-pub use instruction::InstructionIterator;
+pub use instruction::InstructionDecoder;

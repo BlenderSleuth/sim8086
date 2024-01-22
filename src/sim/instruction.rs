@@ -1,5 +1,4 @@
 use std::fmt::{self, Formatter};
-use std::vec::IntoIter;
 
 use super::register_memory::{DataSize, UnsignedData, SignedData, RegisterMemorySegment, SegmentRegister, Immediate, ImmediateRegisterMemory, ImmediateRegisterMemorySegment, Register, RegisterMemory};
 use super::operations::{MoveOp, RegisterMemoryRegisterOp, RegisterMemoryImmediateOp, InPort, OutPort, MathOp, Port};
@@ -86,48 +85,55 @@ impl fmt::Display for Instruction {
             Sub(op) => write!(f, "sub {op}"),
             Xor(op) => write!(f, "xor {op}"),
             Cmp(op) => write!(f, "cmp {op}"),
-            Je(inc) => write!(f, "je ${inc:+}"),
-            Jl(inc) => write!(f, "jl ${inc:+}"),
-            Jle(inc) => write!(f, "jle ${inc:+}"),
-            Jb(inc) => write!(f, "jb ${inc:+}"),
-            Jbe(inc) => write!(f, "jbe ${inc:+}"),
-            Jp(inc) => write!(f, "jp ${inc:+}"),
-            Jo(inc) => write!(f, "jo ${inc:+}"),
-            Js(inc) => write!(f, "js ${inc:+}"),
-            Jne(inc) => write!(f, "jne ${inc:+}"),
-            Jnl(inc) => write!(f, "jnl ${inc:+}"),
-            Jg(inc) => write!(f, "jg ${inc:+}"),
-            Jnb(inc) => write!(f, "jnb ${inc:+}"),
-            Ja(inc) => write!(f, "ja ${inc:+}"),
-            Jnp(inc) => write!(f, "jnp ${inc:+}"),
-            Jno(inc) => write!(f, "jno ${inc:+}"),
-            Jns(inc) => write!(f, "jns ${inc:+}"),
-            Loop(inc) => write!(f, "loop ${inc:+}"),
-            Loopz(inc) => write!(f, "loopz ${inc:+}"),
-            Loopnz(inc) => write!(f, "loopnz ${inc:+}"),
-            Jcxz(inc) => write!(f, "jcxz ${inc:+}"),
+            Je(inc) => write!(f, "je ${:+}", inc+2),
+            Jl(inc) => write!(f, "jl ${:+}", inc+2),
+            Jle(inc) => write!(f, "jle ${:+}", inc+2),
+            Jb(inc) => write!(f, "jb ${:+}", inc+2),
+            Jbe(inc) => write!(f, "jbe ${:+}", inc+2),
+            Jp(inc) => write!(f, "jp ${:+}", inc+2),
+            Jo(inc) => write!(f, "jo ${:+}", inc+2),
+            Js(inc) => write!(f, "js ${:+}", inc+2),
+            Jne(inc) => write!(f, "jne ${:+}", inc+2),
+            Jnl(inc) => write!(f, "jnl ${:+}", inc+2),
+            Jg(inc) => write!(f, "jg ${:+}", inc+2),
+            Jnb(inc) => write!(f, "jnb ${:+}", inc+2),
+            Ja(inc) => write!(f, "ja ${:+}", inc+2),
+            Jnp(inc) => write!(f, "jnp ${:+}", inc+2),
+            Jno(inc) => write!(f, "jno ${:+}", inc+2),
+            Jns(inc) => write!(f, "jns ${:+}", inc+2),
+            Loop(inc) => write!(f, "loop ${:+}", inc+2),
+            Loopz(inc) => write!(f, "loopz ${:+}", inc+2),
+            Loopnz(inc) => write!(f, "loopnz ${:+}", inc+2),
+            Jcxz(inc) => write!(f, "jcxz ${:+}", inc+2),
             Unknown => write!(f, "unknown"),
         }
     }
 }
 
-pub struct InstructionStream {
-    byte_stream: IntoIter<u8>,
+pub struct InstructionStream<'a> {
+    byte_stream: &'a [u8],
+    ip: &'a mut usize,
 }
 
-impl InstructionStream {
+impl<'a> InstructionStream<'a> {
+    pub fn new(byte_stream: &'a [u8], ip: &'a mut usize) -> Self {
+        Self { byte_stream, ip }
+    }
+    
     pub fn next_byte(&mut self) -> u8 {
-        self.byte_stream.next().unwrap()
+        *self.ip += 1;
+        self.byte_stream[*self.ip-1]
     }
 
     pub fn maybe_next_byte(&mut self) -> Option<u8> {
-        self.byte_stream.next()
+        *self.ip += 1;
+        self.byte_stream.get(*self.ip-1).map(|x| *x)
     }
 
     pub fn next_byte_signed(&mut self) -> i8 {
         self.next_byte() as i8
     }
-
+    
     pub fn next_word(&mut self) -> u16 {
         let lo_byte = self.next_byte() as u16;
         let hi_byte = self.next_byte() as u16;
@@ -160,30 +166,22 @@ impl InstructionStream {
     }
 }
 
-pub struct InstructionIterator {
-    instructions: InstructionStream,
+pub struct InstructionDecoder<'a> {
+    byte_stream: &'a [u8],
     segment_override: Option<SegmentRegister>,
 }
 
-impl InstructionIterator {
-    pub fn new(instructions: Vec<u8>) -> Self {
-        let instruction_bytes = InstructionStream {
-            byte_stream: instructions.into_iter(),
-        };
+impl<'a> InstructionDecoder<'a> {
+    pub fn new(byte_stream: &'a [u8]) -> Self {
         Self {
-            instructions: instruction_bytes,
+            byte_stream,
             segment_override: None,
         }
     }
-}
-
-
-impl Iterator for InstructionIterator {
-    type Item = Instruction;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    
+    pub fn decode(&mut self, ip: &mut usize) -> Option<Instruction> {
         use Instruction::*;
-
+        
         // Compares an opcode based on a subset of bits
         fn opcode_cmp(value: u8, mask: u8, format: u8) -> bool {
             value & mask == format & mask
@@ -193,9 +191,10 @@ impl Iterator for InstructionIterator {
         fn flag(value: u8, bit: u8) -> bool {
             ((value >> bit) & 1) != 0
         }
-        
-        let instructions = &mut self.instructions;
 
+        let mut instruction_stream = InstructionStream::new(self.byte_stream, ip);
+        let instructions = &mut instruction_stream;
+        
         Some(loop {
             let byte1 = instructions.maybe_next_byte()?;
 
@@ -422,7 +421,7 @@ impl Iterator for InstructionIterator {
             }
 
             // Match jump opcodes. Increment is relative to the next instruction, two bytes later
-            let increment = instructions.next_byte_signed() + 2;
+            let increment = instructions.next_byte_signed();
             break match byte1 {
                 0b01110100 => Je(increment),
                 0b01111100 => Jl(increment),
@@ -449,3 +448,4 @@ impl Iterator for InstructionIterator {
         })
     }
 }
+

@@ -5,24 +5,28 @@ use super::instruction::Instruction;
 use super::register_memory::*;
 use super::register_memory::RegisterStorage;
 
-pub struct Simulation {
+pub struct Simulator {
     register_storage: RegisterStorage,
+    cached_ip: usize,
     zero_flag: bool,
     parity_flag: bool,
     sign_flag: bool,
 }
 
-impl Simulation {
+impl Simulator {
     pub fn new() -> Self {
         Self {
             register_storage: RegisterStorage::new(),
+            cached_ip: 0,
             zero_flag: false,
             parity_flag: false,
             sign_flag: false,
         }
     }
 
-    pub fn simulate(&mut self, instruction: Instruction) -> String {
+    pub fn simulate(&mut self, instruction: Instruction, ip: &mut usize) -> String {
+        self.cached_ip = *ip;
+        
         match instruction {
             Instruction::Mov(move_op) => {
                 let new_value = match move_op.src {
@@ -51,23 +55,30 @@ impl Simulation {
                 self.write_rm(add_op.dest, result);
                 let new_value = self.read_rm(add_op.dest, true);
 
-                format!("{}:{:#0x}->{:#0x} {}", add_op.dest, arg0, new_value, self.set_flags(result))
+                format!("{}:{arg0:#0x}->{new_value:#0x} {}", add_op.dest, self.set_flags(result))
             }
             Instruction::Sub(sub_op) => {
                 let (arg0, arg1) = self.get_args(sub_op);
-                let result = arg0 - arg1;
+                
+                let (result, _overflow) = arg0.overflowing_sub(arg1);
                 
                 self.write_rm(sub_op.dest, result);
                 let new_value = self.read_rm(sub_op.dest, true);
                 
-                format!("{}:{:#0x}->{:#0x} {}", sub_op.dest, arg0, new_value, self.set_flags(result))
+                format!("{}:{arg0:#0x}->{new_value:#0x} {}", sub_op.dest, self.set_flags(result))
             }
             Instruction::Cmp(cmp_op) => {
                 let (arg0, arg1) = self.get_args(cmp_op);
                 let result = arg0 - arg1;
                 self.set_flags(result)
             }
-            _ => String::new(),
+            Instruction::Jne(increment) => {
+                if !self.zero_flag {
+                    Simulator::jump(ip, increment);
+                };
+                String::new()
+            },
+            _ => panic!("Cannot simulate instruction: {instruction}"),
         }
     }
     
@@ -113,6 +124,10 @@ impl Simulation {
         }
     }
 
+    fn jump(ip: &mut usize, increment: i8) {
+        *ip = ip.checked_add_signed(increment.into()).expect("Jumped outside instruction stream.");
+    }
+    
     fn print_flags(&self) -> String {
         format!("{}{}{}",
                 if self.zero_flag   { "Z" } else { "" },
@@ -131,14 +146,14 @@ impl Simulation {
         let new_flags = self.print_flags();
         
         if old_flags.len() > 0 || new_flags.len() > 0 {
-            format!("flags:{}->{}", old_flags, new_flags)
+            format!("flags:{old_flags}->{new_flags}")
         } else { 
             String::new() 
         }
     }
 }
 
-impl fmt::Display for Simulation {
+impl fmt::Display for Simulator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let ax = self.register_storage.read_register(Register::AX);
         let bx = self.register_storage.read_register(Register::BX);
@@ -154,22 +169,26 @@ impl fmt::Display for Simulation {
         let ss = self.register_storage.read_segment_register(SegmentRegister::SS);
         let ds = self.register_storage.read_segment_register(SegmentRegister::DS);
         
+        let ip = self.cached_ip;
+        
         let flags = self.print_flags();
         
-        if ax > 0 { writeln!(f, "      ax: {:#06x} ({ax})", ax)?; }
-        if bx > 0 { writeln!(f, "      bx: {:#06x} ({bx})", bx)?; }
-        if cx > 0 { writeln!(f, "      cx: {:#06x} ({cx})", cx)?; }
-        if dx > 0 { writeln!(f, "      dx: {:#06x} ({dx})", dx)?; }
+        if bx > 0 { writeln!(f, "      bx: {bx:#06x} ({bx})")?; }
+        if ax > 0 { writeln!(f, "      ax: {ax:#06x} ({ax})")?; }
+        if cx > 0 { writeln!(f, "      cx: {cx:#06x} ({cx})")?; }
+        if dx > 0 { writeln!(f, "      dx: {dx:#06x} ({dx})")?; }
+        
+        if sp > 0 { writeln!(f, "      sp: {sp:#06x} ({sp})")?; }
+        if bp > 0 { writeln!(f, "      bp: {bp:#06x} ({bp})")?; }
+        if si > 0 { writeln!(f, "      si: {si:#06x} ({si})")?; }
+        if di > 0 { writeln!(f, "      di: {di:#06x} ({di})")?; }
 
-        if sp > 0 { writeln!(f, "      sp: {:#06x} ({sp})", sp)?; }
-        if bp > 0 { writeln!(f, "      bp: {:#06x} ({bp})", bp)?; }
-        if si > 0 { writeln!(f, "      si: {:#06x} ({si})", si)?; }
-        if di > 0 { writeln!(f, "      di: {:#06x} ({di})", di)?; }
+        if es > 0 { writeln!(f, "      es: {es:#06x} ({es})")?; }
+        if ss > 0 { writeln!(f, "      ss: {ss:#06x} ({ss})")?; }
+        if ds > 0 { writeln!(f, "      ds: {ds:#06x} ({ds})")?; }
 
-        if es > 0 { writeln!(f, "      es: {:#06x} ({es})", es)?; }
-        if ss > 0 { writeln!(f, "      ss: {:#06x} ({ss})", ss)?; }
-        if ds > 0 { writeln!(f, "      ds: {:#06x} ({ds})", ds)?; }
-
+        writeln!(f, "      ip: {ip:#06x} ({ip})")?;
+        
         if flags.len() > 0 { writeln!(f, "   flags: {flags}")?; }
         
         Ok(())

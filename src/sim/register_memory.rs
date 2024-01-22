@@ -493,7 +493,7 @@ pub struct Immediate(SignedData);
 
 impl Immediate {
     pub fn new(sflag: bool, data_size: DataSize, instructions: &mut InstructionStream) -> Self {
-        let signed_data = instructions.next_data_signed(data_size);
+        let signed_data = instructions.next_data_signed(if sflag { DataSize::Byte } else { data_size });
 
         Immediate(if sflag {
             signed_data.sign_extend()
