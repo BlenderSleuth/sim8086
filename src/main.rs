@@ -19,7 +19,8 @@ fn main() -> std::io::Result<()> {
     // nasm input.asm | cargo run -- --exec | save -f output.txt
     
     let args: Vec<String> = env::args().collect();
-    let exec = args.contains(&"--exec".to_owned());
+    let exec = args.contains(&String::from("--exec"));
+    let dump = args.contains(&String::from("--dump"));
     
     let part_one_tests = Path::new("../../computer_enhance/perfaware/part1");
     // listing_0037_single_register_mov
@@ -42,21 +43,21 @@ fn main() -> std::io::Result<()> {
 
     let memory_size = 65536; // 2^16 = 65K
     let instructions_ptr = 0;
-    let mut simulation = Simulator::new(memory_size, instructions_ptr, &instructions);
+    let mut simulator = Simulator::new(memory_size, instructions_ptr, &instructions);
     
     if !exec {
         println!("bits 16");
     }
     
-    let mut old_ip = simulation.get_ip();
-    while let Some(instruction) = simulation.decode() {
+    let mut old_ip = simulator.get_ip();
+    while let Some(instruction) = simulator.decode() {
         print!("{instruction}");
         
         // simulate
         if exec {
-            let sim_result = simulation.simulate(instruction);
+            let sim_result = simulator.simulate(instruction);
             
-            let ip = simulation.get_ip();
+            let ip = simulator.get_ip();
             print!(" ; ip:{old_ip:#0x}->{ip:#0x} {sim_result}");
             old_ip = ip;
         }
@@ -67,7 +68,16 @@ fn main() -> std::io::Result<()> {
     if exec {
         println!();
         println!("Final registers:");
-        println!("{simulation}");
+        println!("{simulator}");
+    }
+    
+    if dump {
+        let dump_path = Path::new("dump.data");
+        let mut dumpfile = match File::create(dump_path) {
+            Err(why) => panic!("couldn't open {}: {}", dump_path.display(), why),
+            Ok(file) => file,
+        };
+        dumpfile.write_all(simulator.get_memory())?;
     }
 
     Ok(())

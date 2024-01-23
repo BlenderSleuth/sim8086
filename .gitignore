@@ -20,6 +20,7 @@ target/
 **/input
 **/input.asm
 **/input.txt
+**/dump.data
 
 # IDE configs
 .vscode/
