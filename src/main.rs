@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 mod sim;
-use sim::{InstructionDecoder};
 use sim::simulation::Simulator;
 
 use std::fs::File;
@@ -40,28 +39,29 @@ fn main() -> std::io::Result<()> {
 
     let mut instructions = Vec::<u8>::new();
     file.read_to_end(&mut instructions)?;
-    
-    let mut decoder = InstructionDecoder::new(&mut instructions);
-    let mut simulation = Simulator::new();
-    let mut ip = 0;
-    let mut old_ip = 0;
+
+    let memory_size = 65536; // 2^16 = 65K
+    let instructions_ptr = 0;
+    let mut simulation = Simulator::new(memory_size, instructions_ptr, &instructions);
     
     if !exec {
         println!("bits 16");
     }
     
-    while let Some(instruction) = decoder.decode(&mut ip) {
+    let mut old_ip = simulation.get_ip();
+    while let Some(instruction) = simulation.decode() {
         print!("{instruction}");
         
         // simulate
         if exec {
-            let sim_result = simulation.simulate(instruction, &mut ip);
-            print!(" ; ip:{old_ip:#0x}->{ip:#0x} {sim_result}")
+            let sim_result = simulation.simulate(instruction);
+            
+            let ip = simulation.get_ip();
+            print!(" ; ip:{old_ip:#0x}->{ip:#0x} {sim_result}");
+            old_ip = ip;
         }
         
         println!();
-
-        old_ip = ip;
     }
     
     if exec {

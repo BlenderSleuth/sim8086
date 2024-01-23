@@ -1,36 +1,318 @@
 use std::fmt::{self, Formatter};
 
-use super::operations::RegisterMemoryImmediateOp;
+use super::operations::{InPort, MathOp, MoveOp, OutPort, Port, RegisterMemoryImmediateOp, RegisterMemoryRegisterOp};
 use super::utils;
-use super::instruction::Instruction;
+use super::instruction::{HALT_OPCODE, Instruction, InstructionStream};
 use super::register_memory::*;
 
 pub struct Simulator {
     register_storage: RegisterStorage,
-    memory_storage: [u8; 65536],
-    cached_ip: usize,
+    memory_storage: Box<[u8]>,
+    segment_override: Option<SegmentRegister>,
+    ip: usize,
     zero_flag: bool,
     parity_flag: bool,
     sign_flag: bool,
 }
 
 impl Simulator {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(memory_size: usize, instruction_start: usize, instructions: &[u8]) -> Self {
+        let mut simulator = Self {
             register_storage: RegisterStorage::new(),
-            memory_storage: [0; 65536],
-            cached_ip: 0,
+            memory_storage: vec![0u8; memory_size].into_boxed_slice(),
+            segment_override: None,
+            ip: instruction_start,
             zero_flag: false,
             parity_flag: false,
             sign_flag: false,
-        }
+        };
+
+        // Copies instructions into simulation memory
+        simulator.memory_storage[..instructions.len()].clone_from_slice(instructions);
+        // Append halt code
+        simulator.memory_storage[instructions.len()] = HALT_OPCODE;
+            
+        simulator
     }
 
-    pub fn simulate(&mut self, instruction: Instruction, ip: &mut usize) -> String {
-        self.cached_ip = *ip;
+    pub fn decode(&mut self) -> Option<Instruction> {
+        use Instruction::*;
+
+        // Compares an opcode based on a subset of bits
+        fn opcode_cmp(value: u8, mask: u8, format: u8) -> bool {
+            value & mask == format & mask
+        }
+
+        // Returns a bool flag corresponding to the value of a specified bit
+        fn flag(value: u8, bit: u8) -> bool {
+            ((value >> bit) & 1) != 0
+        }
+
+        let mut instruction_stream = InstructionStream::new(&*self.memory_storage, &mut self.ip);
+        let instructions = &mut instruction_stream;
+
+        Some(loop {
+            let byte1 = instructions.maybe_next_byte()?;
+
+            // Mov (Register/memory to/from register)
+            if opcode_cmp(byte1, 0b11111100, 0b10001000) {
+                let dflag = flag(byte1, 1);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
+
+                let rm_op = RegisterMemoryImmediateOp::new_reg_mem_with_reg(
+                    dflag,
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                );
+
+                break Mov(rm_op.into());
+            }
+            // Mov (Immediate to register/memory)
+            else if opcode_cmp(byte1, 0b11111110, 0b11000110) {
+                let sflag = false;
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
+
+                // Mov immediate instruction has different opcode, ignore math op
+                let (rm_op, _) = RegisterMemoryImmediateOp::new_immediate(
+                    sflag,
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                );
+
+                break Mov(rm_op.into());
+            }
+            // Mov (Immediate to register)
+            else if opcode_cmp(byte1, 0b11110000, 0b10110000) {
+                let sflag = false;
+                let data_size = DataSize::from_wflag(flag(byte1, 3));
+                let reg_bits = byte1;
+                let reg = Register::new(data_size, reg_bits);
+
+                break Mov(MoveOp {
+                    src: ImmediateRegisterMemorySegment::Immediate(Immediate::new(sflag, data_size, instructions)),
+                    dest: RegisterMemorySegment::RM(RegisterMemory::Register(reg)),
+                });
+            }
+            // Mov (Memory to accumulator / Accumulator to memory)
+            else if opcode_cmp(byte1, 0b11111100, 0b10100000) {
+                let dflag = flag(byte1, 1);
+                let data_size = DataSize::from_wflag(flag(byte1, 0));
+
+                let addr = RegisterMemory::DirectAddress(instructions.next_direct_address(data_size));
+                let accumulator = RegisterMemory::new_accumulator(data_size);
+
+                break Mov(if dflag {
+                    MoveOp {
+                        src: ImmediateRegisterMemorySegment::RM(accumulator),
+                        dest: RegisterMemorySegment::RM(addr),
+                    }
+                } else {
+                    MoveOp {
+                        src: ImmediateRegisterMemorySegment::RM(addr),
+                        dest: RegisterMemorySegment::RM(accumulator),
+                    }
+                });
+            }
+            // Mov (Register/memory to segment register / Segment register to register/memory)
+            else if opcode_cmp(byte1, 0b11111101, 0b10001100) {
+                let dflag = flag(byte1, 1);
+
+                break Mov(MoveOp::new_segment_register(
+                    dflag,
+                    self.segment_override.take(),
+                    instructions,
+                ));
+            }
+            // Segment override prefix
+            else if opcode_cmp(byte1, 0b11100111, 0b00100110) {
+                let sr_bits = byte1 >> 3;
+                self.segment_override.replace(SegmentRegister::new(sr_bits));
+                continue;
+            }
+            // MathOp (Register/memory to/from register)
+            else if opcode_cmp(byte1, 0b11000100, 0b00000000) {
+                let math_op = MathOp::new(byte1 >> 3);
+                let dflag = flag(byte1, 1);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
+
+                let rm_op = RegisterMemoryImmediateOp::new_reg_mem_with_reg(
+                    dflag,
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                );
+
+                break Instruction::new_math_instruction(math_op, rm_op);
+            }
+            // MathOp (Immediate to register/memory)
+            else if opcode_cmp(byte1, 0b11111100, 0b10000000) {
+                let sflag = flag(byte1, 1);
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
+
+                let (rm_op, math_op) = RegisterMemoryImmediateOp::new_immediate(
+                    sflag,
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                );
+
+                break Instruction::new_math_instruction(math_op, rm_op);
+            }
+            // MathOp (Immediate to accumulator)
+            else if opcode_cmp(byte1, 0b11000110, 0b00000100) {
+                let math_op = MathOp::new(byte1 >> 3);
+                let sflag = false;
+                let data_size = DataSize::from_wflag(flag(byte1, 0));
+
+                let immediate = Immediate::new(sflag, data_size, instructions);
+                let accumulator = RegisterMemory::new_accumulator(data_size);
+
+                let rm_op = RegisterMemoryImmediateOp {
+                    dest: accumulator,
+                    src: ImmediateRegisterMemory::Immediate(immediate),
+                };
+
+                break Instruction::new_math_instruction(math_op, rm_op);
+            }
+            // Push (Register/memory)
+            else if opcode_cmp(byte1, 0b11111111, 0b11111111) {
+                let wflag = DataSize::Word;
+
+                let byte2 = instructions.next_byte();
+
+                let mode = byte2 >> 6;
+                let rm = byte2;
+
+                break Push(RegisterMemorySegment::RM(RegisterMemory::new_mod_rm(
+                    wflag,
+                    mode,
+                    rm,
+                    self.segment_override.take(),
+                    instructions,
+                )));
+            }
+            // Push (Register)
+            else if opcode_cmp(byte1, 0b11111000, 0b01010000) {
+                let wflag = DataSize::Word;
+                let reg = Register::new(wflag, byte1);
+
+                break Push(RegisterMemorySegment::RM(RegisterMemory::Register(reg)));
+            }
+            // Push (Segment Register)
+            else if opcode_cmp(byte1, 0b11100111, 0b00000110) {
+                let sr = SegmentRegister::new(byte1 >> 3);
+                break Push(RegisterMemorySegment::SegmentRegister(sr));
+            }
+            // Pop (Register/memory)
+            else if opcode_cmp(byte1, 0b11111111, 0b10001111) {
+                let wflag = DataSize::Word;
+
+                let byte2 = instructions.next_byte();
+
+                let mode = byte2 >> 6;
+                let rm = byte2;
+
+                break Pop(RegisterMemorySegment::RM(RegisterMemory::new_mod_rm(
+                    wflag,
+                    mode,
+                    rm,
+                    self.segment_override.take(),
+                    instructions,
+                )));
+            }
+            // Pop (Register)
+            else if opcode_cmp(byte1, 0b11111000, 0b01011000) {
+                let wflag = DataSize::Word;
+                let reg = Register::new(wflag, byte1);
+
+                break Pop(RegisterMemorySegment::RM(RegisterMemory::Register(reg)));
+            }
+            // Pop (Segment Register)
+            else if opcode_cmp(byte1, 0b11100111, 0b00000111) {
+                let sr = SegmentRegister::new(byte1 >> 3);
+                break Pop(RegisterMemorySegment::SegmentRegister(sr));
+            }
+            // Xchg (Register/memory with register)
+            else if opcode_cmp(byte1, 0b11111110, 0b10000110) {
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
+
+                let (rm, reg) = RegisterMemoryRegisterOp::new_reg_mem_with_reg(
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                );
+
+                break Xchg(RegisterMemoryRegisterOp { rm, reg });
+            }
+            // Xchg (Register with accumulator)
+            else if opcode_cmp(byte1, 0b11111000, 0b10010000) {
+                let wflag = DataSize::Word;
+                let rm = RegisterMemory::new_register(wflag, byte1);
+                break Xchg(RegisterMemoryRegisterOp { rm, reg: Register::AX });
+            }
+            // In/out (fixed/variable port)
+            else if opcode_cmp(byte1, 0b11110100, 0b11100100) {
+                let data_size = DataSize::from_wflag(flag(byte1, 0));
+                let out = flag(byte1, 1);
+                let variable = flag(byte1, 3);
+
+                break if out {
+                    if variable {
+                        Out(OutPort(Port::Variable(data_size)))
+                    } else {
+                        Out(OutPort(Port::Fixed(data_size.with_unsigned_data(instructions.next_byte() as u16))))
+                    }
+                } else {
+                    if variable {
+                        In(InPort(Port::Variable(data_size)))
+                    } else {
+                        In(InPort(Port::Fixed(data_size.with_unsigned_data(instructions.next_byte() as u16))))
+                    }
+                }
+            }
+            else if opcode_cmp(byte1, 0b11111111, 0b11010111) {
+                break Xlat;
+            }
+            else if opcode_cmp(byte1, 0b11111111, HALT_OPCODE) {
+                // Halt code
+                return None;
+            }
+
+            // Match jump opcodes. Increment is relative to the next instruction, two bytes later
+            let increment = instructions.next_byte_signed();
+            break match byte1 {
+                0b01110100 => Je(increment),
+                0b01111100 => Jl(increment),
+                0b01111110 => Jle(increment),
+                0b01110010 => Jb(increment),
+                0b01110110 => Jbe(increment),
+                0b01111010 => Jp(increment),
+                0b01110000 => Jo(increment),
+                0b01111000 => Js(increment),
+                0b01110101 => Jne(increment),
+                0b01111101 => Jnl(increment),
+                0b01111111 => Jg(increment),
+                0b01110011 => Jnb(increment),
+                0b01110111 => Ja(increment),
+                0b01111011 => Jnp(increment),
+                0b01110001 => Jno(increment),
+                0b01111001 => Jns(increment),
+                0b11100010 => Loop(increment),
+                0b11100001 => Loopz(increment),
+                0b11100000 => Loopnz(increment),
+                0b11100011 => Jcxz(increment),
+                _ => Unknown,
+            };
+        })
+    }
+    
+    pub fn simulate(&mut self, instruction: Instruction) -> String {
+        use Instruction::*;
         
         match instruction {
-            Instruction::Mov(move_op) => {
+            Mov(move_op) => {
                 let data_size = move_op.get_data_size();
                 
                 let new_value = match move_op.src {
@@ -52,7 +334,7 @@ impl Simulator {
                     }
                 }
             }
-            Instruction::Add(add_op) => {
+            Add(add_op) => {
                 let (arg0, arg1, data_size) = self.get_args(add_op);
                 let result = arg0 + arg1;
 
@@ -61,7 +343,7 @@ impl Simulator {
 
                 format!("{}:{arg0:#0x}->{new_value:#0x} {}", add_op.dest, self.set_flags(result))
             }
-            Instruction::Sub(sub_op) => {
+            Sub(sub_op) => {
                 let (arg0, arg1, data_size) = self.get_args(sub_op);
                 let (result, _overflow) = arg0.overflowing_sub(arg1);
                 
@@ -70,19 +352,31 @@ impl Simulator {
                 
                 format!("{}:{arg0:#0x}->{new_value:#0x} {}", sub_op.dest, self.set_flags(result))
             }
-            Instruction::Cmp(cmp_op) => {
+            Cmp(cmp_op) => {
                 let (arg0, arg1, _) = self.get_args(cmp_op);
                 let (result, _overflow) = arg0.overflowing_sub(arg1);
                 self.set_flags(result)
             }
-            Instruction::Jne(increment) => {
+            Jne(increment) => {
                 if !self.zero_flag {
-                    Simulator::jump(ip, increment);
+                    Simulator::jump(&mut self.ip, increment);
                 };
                 String::new()
             },
             _ => panic!("Cannot simulate instruction: {instruction}"),
         }
+    }
+    
+    pub fn get_memory(&self) -> &[u8] {
+        return &self.memory_storage
+    }
+
+    pub fn get_memory_mut(&mut self) -> &mut [u8] {
+        return &mut self.memory_storage
+    }
+    
+    pub fn get_ip(&self) -> usize {
+        self.ip
     }
     
     fn get_args(&self, op: RegisterMemoryImmediateOp) -> (u16, u16, DataSize) {
@@ -219,15 +513,16 @@ impl fmt::Display for Simulator {
         let di = self.register_storage.read_register(Register::DI);
 
         let es = self.register_storage.read_segment_register(SegmentRegister::ES);
+        let cs = self.register_storage.read_segment_register(SegmentRegister::CS);
         let ss = self.register_storage.read_segment_register(SegmentRegister::SS);
         let ds = self.register_storage.read_segment_register(SegmentRegister::DS);
         
-        let ip = self.cached_ip;
+        let ip = self.ip;
         
         let flags = self.print_flags();
-        
-        if bx > 0 { writeln!(f, "      bx: {bx:#06x} ({bx})")?; }
+
         if ax > 0 { writeln!(f, "      ax: {ax:#06x} ({ax})")?; }
+        if bx > 0 { writeln!(f, "      bx: {bx:#06x} ({bx})")?; }
         if cx > 0 { writeln!(f, "      cx: {cx:#06x} ({cx})")?; }
         if dx > 0 { writeln!(f, "      dx: {dx:#06x} ({dx})")?; }
         
@@ -237,6 +532,7 @@ impl fmt::Display for Simulator {
         if di > 0 { writeln!(f, "      di: {di:#06x} ({di})")?; }
 
         if es > 0 { writeln!(f, "      es: {es:#06x} ({es})")?; }
+        if cs > 0 { writeln!(f, "      cs: {cs:#06x} ({cs})")?; }
         if ss > 0 { writeln!(f, "      ss: {ss:#06x} ({ss})")?; }
         if ds > 0 { writeln!(f, "      ds: {ds:#06x} ({ds})")?; }
 
