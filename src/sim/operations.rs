@@ -124,6 +124,10 @@ impl RegisterMemoryImmediateOp {
             MathOp::new(op_bits),
         )
     }
+    
+    pub fn get_data_size(&self) -> DataSize {
+        self.dest.get_data_size().or(self.src.get_data_size()).expect("Either op destination or source must enforce a data size.")
+    }
 }
 
 impl fmt::Display for RegisterMemoryImmediateOp {
@@ -143,7 +147,8 @@ impl MoveOp {
         dflag: bool,
         segment_override: Option<SegmentRegister>,
         instructions: &mut InstructionStream,
-    ) -> Self {
+    ) -> Self 
+    {
         // Segment registers are always wide
         let wflag = DataSize::Word;
 
@@ -168,6 +173,10 @@ impl MoveOp {
                 dest: RegisterMemorySegment::RM(rm),
             }
         }
+    }
+    
+    pub fn get_data_size(&self) -> DataSize {
+        self.dest.get_data_size().or(self.src.get_data_size()).expect("Either op destination or source must enforce a data size.")
     }
 }
 

@@ -3,5 +3,6 @@ pub mod register_memory;
 pub mod operations;
 pub mod instruction;
 pub mod simulation;
+pub mod utils;
 
 pub use instruction::InstructionDecoder;

@@ -1,5 +1,6 @@
 use std::fmt::{self, Formatter};
 
+use super::utils;
 use super::register_memory::{DataSize, UnsignedData, SignedData, RegisterMemorySegment, SegmentRegister, Immediate, ImmediateRegisterMemory, ImmediateRegisterMemorySegment, Register, RegisterMemory};
 use super::operations::{MoveOp, RegisterMemoryRegisterOp, RegisterMemoryImmediateOp, InPort, OutPort, MathOp, Port};
 
@@ -135,9 +136,9 @@ impl<'a> InstructionStream<'a> {
     }
     
     pub fn next_word(&mut self) -> u16 {
-        let lo_byte = self.next_byte() as u16;
-        let hi_byte = self.next_byte() as u16;
-        hi_byte << 8 | lo_byte
+        let lo = self.next_byte();
+        let hi = self.next_byte();
+        utils::combine_u8s_to_u16(hi, lo)
     }
 
     pub fn next_word_signed(&mut self) -> i16 {

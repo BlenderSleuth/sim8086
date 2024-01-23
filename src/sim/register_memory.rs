@@ -2,7 +2,7 @@ use std::fmt::{self, Formatter};
 use super::instruction::InstructionStream;
 use super::address_displacement::AddressDisplacement;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum DataSize {
     Byte,
     Word,
@@ -19,7 +19,7 @@ pub enum SignedData {
 }
 
 impl SignedData {
-    pub fn get_data(&self) -> u16 {
+    pub(crate) fn get_data(&self) -> u16 {
         match *self { 
             SignedData::Byte(data) => data as u16,
             SignedData::Word(data) => data as u16,
@@ -216,6 +216,15 @@ impl Register {
             Register::AL | Register::BL | Register::CL | Register::DL => RegisterType::Low
         }
     }
+
+    fn get_size(&self) -> DataSize {
+        match self {
+            Register::AX | Register::BX | Register::CX | Register::DX |
+            Register::SP | Register::BP | Register::SI | Register::DI => DataSize::Word,
+            Register::AH | Register::BH | Register::CH | Register::DH |
+            Register::AL | Register::BL | Register::CL | Register::DL => DataSize::Byte
+        }
+    }
 }
 
 impl fmt::Display for Register {
@@ -361,8 +370,8 @@ impl fmt::Display for AddressRegisterCalculation {
 
 #[derive(Clone, Copy)]
 pub struct AddressDisplacementCalculation {
-    rm: AddressRegisterCalculation,
-    displacement: AddressDisplacement,
+    pub(crate) rm: AddressRegisterCalculation,
+    pub(crate) displacement: AddressDisplacement,
     segment_override: Option<SegmentRegister>,
 }
 
@@ -455,6 +464,13 @@ impl RegisterMemory {
             _ => unreachable!(),
         }
     }
+
+    pub(crate) fn get_data_size(&self) -> Option<DataSize> {
+        match self {
+            RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_) => None,
+            RegisterMemory::Register(reg) => Some(reg.get_size()),
+        }
+    }
 }
 
 impl fmt::Display for RegisterMemory {
@@ -476,6 +492,15 @@ impl fmt::Display for RegisterMemory {
 pub enum RegisterMemorySegment {
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
+}
+
+impl RegisterMemorySegment {
+    pub(crate) fn get_data_size(&self) -> Option<DataSize> {
+        match self {
+            RegisterMemorySegment::RM(rm) => rm.get_data_size(),
+            RegisterMemorySegment::SegmentRegister(_) => Some(DataSize::Word),
+        }
+    }
 }
 
 impl fmt::Display for RegisterMemorySegment {
@@ -502,7 +527,7 @@ impl Immediate {
         })
     }
 
-    pub fn get_data(&self) -> u16 {
+    pub(crate) fn get_data(&self) -> u16 {
         self.0.get_data()
     }
 }
@@ -522,6 +547,15 @@ pub enum ImmediateRegisterMemory {
     RM(RegisterMemory),
 }
 
+impl ImmediateRegisterMemory {
+    pub(crate) fn get_data_size(&self) -> Option<DataSize> {
+        match self {
+            ImmediateRegisterMemory::Immediate(imm) => Some(imm.0.get_size()),
+            ImmediateRegisterMemory::RM(rm) => rm.get_data_size(),
+        }
+    }
+}
+
 impl fmt::Display for ImmediateRegisterMemory {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use ImmediateRegisterMemory::*;
@@ -537,6 +571,16 @@ pub enum ImmediateRegisterMemorySegment {
     Immediate(Immediate),
     RM(RegisterMemory),
     SegmentRegister(SegmentRegister),
+}
+
+impl ImmediateRegisterMemorySegment {
+    pub(crate) fn get_data_size(&self) -> Option<DataSize> {
+        match self {
+            ImmediateRegisterMemorySegment::Immediate(imm) => Some(imm.0.get_size()),
+            ImmediateRegisterMemorySegment::RM(rm) => rm.get_data_size(),
+            ImmediateRegisterMemorySegment::SegmentRegister(_) => Some(DataSize::Word),
+        }
+    }
 }
 
 impl From<ImmediateRegisterMemory> for ImmediateRegisterMemorySegment {
@@ -591,10 +635,12 @@ impl RegisterStorage {
         match register.get_type() {
             RegisterType::Whole => *data = value,
             RegisterType::High => {
+                assert!(value < 0xffu16);
                 *data &= 0x00ffu16;
                 *data |= value << 8;
             },
             RegisterType::Low => {
+                assert!(value < 0xffu16);
                 *data &= 0xff00u16;
                 *data |= value & 0x00ffu16;
             },
