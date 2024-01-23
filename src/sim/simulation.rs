@@ -363,6 +363,15 @@ impl Simulator {
                 };
                 String::new()
             },
+            Loop(increment) => {
+                let count = self.register_storage.read_register(Register::CX) - 1;
+                self.register_storage.write_register(Register::CX, count);
+                
+                if count != 0 {
+                    Simulator::jump(&mut self.ip, increment);
+                };
+                String::new()
+            }
             _ => panic!("Cannot simulate instruction: {instruction}"),
         }
     }
