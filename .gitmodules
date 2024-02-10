@@ -1,0 +1,3 @@
+[submodule "gamesim86/sna86"]
+	path = gamesim86/sna86
+	url = https://gist.github.com/charlesastaylor/18c7c8005fed9d0af1a3ee2b24fcd724

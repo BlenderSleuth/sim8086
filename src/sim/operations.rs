@@ -226,3 +226,23 @@ impl fmt::Display for OutPort {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+pub enum JmpOp {
+    Byte(i8),
+    Word(i16),
+    Indirect(RegisterMemory),
+    FarIndirect(RegisterMemory),
+}
+
+impl fmt::Display for JmpOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self { 
+            JmpOp::Byte(inc) => write!(f, "${:+}", inc+2),
+            JmpOp::Word(inc) => write!(f, "${:+}", inc+2),
+            JmpOp::Indirect(rm) => write!(f, "{rm}"),
+            JmpOp::FarIndirect(rm) => write!(f, "far {rm}")
+        }
+        
+    }
+}

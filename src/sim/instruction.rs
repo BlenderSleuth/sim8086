@@ -1,8 +1,8 @@
 use std::fmt::{self, Formatter};
 
 use super::utils;
-use super::register_memory::{DataSize, UnsignedData, SignedData, RegisterMemorySegment};
-use super::operations::{MoveOp, RegisterMemoryRegisterOp, RegisterMemoryImmediateOp, InPort, OutPort, MathOp};
+use super::register_memory::{DataSize, UnsignedData, SignedData, RegisterMemorySegment, RegisterMemory};
+use super::operations::{MoveOp, RegisterMemoryRegisterOp, RegisterMemoryImmediateOp, InPort, OutPort, MathOp, JmpOp};
 
 pub const HALT_OPCODE: u8 = 0b11110100;
 
@@ -28,7 +28,10 @@ pub enum Instruction {
     Sub(RegisterMemoryImmediateOp),
     Xor(RegisterMemoryImmediateOp),
     Cmp(RegisterMemoryImmediateOp),
+    Inc(RegisterMemory),
+    Dec(RegisterMemory),
     // Jumps
+    Jmp(JmpOp),
     Je(i8),
     Jl(i8),
     Jle(i8),
@@ -49,6 +52,8 @@ pub enum Instruction {
     Loopz(i8),
     Loopnz(i8),
     Jcxz(i8),
+    Interrupt(u8),
+    Halt,
     Unknown,
 }
 
@@ -88,6 +93,9 @@ impl fmt::Display for Instruction {
             Sub(op) => write!(f, "sub {op}"),
             Xor(op) => write!(f, "xor {op}"),
             Cmp(op) => write!(f, "cmp {op}"),
+            Inc(op) => write!(f, "inc {op}"),
+            Dec(op) => write!(f, "dec {op}"),
+            Jmp(op) => write!(f, "jmp {op}"),
             Je(inc) => write!(f, "je ${:+}", inc+2),
             Jl(inc) => write!(f, "jl ${:+}", inc+2),
             Jle(inc) => write!(f, "jle ${:+}", inc+2),
@@ -108,6 +116,8 @@ impl fmt::Display for Instruction {
             Loopz(inc) => write!(f, "loopz ${:+}", inc+2),
             Loopnz(inc) => write!(f, "loopnz ${:+}", inc+2),
             Jcxz(inc) => write!(f, "jcxz ${:+}", inc+2),
+            Interrupt(int_type) => write!(f, "int {:0x}h", int_type),
+            Halt => write!(f, "hlt"),
             Unknown => write!(f, "unknown"),
         }
     }

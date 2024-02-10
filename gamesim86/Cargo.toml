@@ -1,10 +1,11 @@
-workspace = { members = ["gamesim86"] }
-
 [package]
-name = "sim8086"
+name = "gamesim86"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+sim8086 = { path = ".." }
+device_query = "1.1.3"
+show-image = "0.13.1"
