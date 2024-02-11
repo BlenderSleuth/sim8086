@@ -128,6 +128,27 @@ impl RegisterMemoryImmediateOp {
     pub fn get_data_size(&self) -> DataSize {
         self.dest.get_data_size().or(self.src.get_data_size()).expect("Either op destination or source must enforce a data size.")
     }
+
+    pub(crate) fn get_clocks(&self) -> u32 {
+        match self.src {
+            ImmediateRegisterMemory::RM(src) => match (self.dest, src) {
+                (RegisterMemory::Register(_), RegisterMemory::Register(_)) => 3, // Reg <- Reg
+                (RegisterMemory::Register(_), RegisterMemory::Memory(_) | RegisterMemory::DirectAddress(_)) => {
+                    // Reg <- Mem
+                    9 + src.get_ea_clocks(1)
+                }
+                (RegisterMemory::Memory(_) | RegisterMemory::DirectAddress(_), RegisterMemory::Register(_)) => {
+                    // Mem <- Reg
+                    16 + self.dest.get_ea_clocks(2)
+                }
+                (RegisterMemory::Memory(_) | RegisterMemory::DirectAddress(_), RegisterMemory::Memory(_) | RegisterMemory::DirectAddress(_)) => panic!("Memory to memory move does not exist")
+            }
+            ImmediateRegisterMemory::Immediate(_) => match self.dest {
+                RegisterMemory::Register(_) => 4,
+                RegisterMemory::Memory(_) | RegisterMemory::DirectAddress(_) => 17 + self.dest.get_ea_clocks(2),
+            }
+        }
+    }
 }
 
 impl fmt::Display for RegisterMemoryImmediateOp {
@@ -177,6 +198,46 @@ impl MoveOp {
     
     pub fn get_data_size(&self) -> DataSize {
         self.dest.get_data_size().or(self.src.get_data_size()).expect("Either op destination or source must enforce a data size.")
+    }
+
+    pub fn get_clocks(&self) -> u32 {
+        match self.dest {
+            RegisterMemorySegment::RM(dest) => match self.src {
+                ImmediateRegisterMemorySegment::RM(src) =>  {
+                    match (dest, src) {
+                        (RegisterMemory::Register(reg),
+                            RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_)) => if reg.is_accumulator() {
+                            10 // TODO: memory unaligned access penalty
+                        } else {
+                            // Reg <- Mem
+                            8 + src.get_ea_clocks(1)
+                        }
+                        (RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_),
+                            RegisterMemory::Register(reg)) => if reg.is_accumulator() {
+                            10
+                        } else {
+                            // Mem <- Reg
+                            9 + dest.get_ea_clocks(1)
+                        }
+                        (RegisterMemory::Register(_), RegisterMemory::Register(_)) => 2, // Reg <- Reg
+                        (RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_),
+                            RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_)) =>
+                            panic!("Memory to memory move does not exist"),
+                    }
+                } 
+                ImmediateRegisterMemorySegment::Immediate(_) => {
+                    match dest {
+                        RegisterMemory::Register(_) => 4,
+                        RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_) => 10 + dest.get_ea_clocks(1)
+                    }
+                }
+                ImmediateRegisterMemorySegment::SegmentRegister(_) =>
+                    unimplemented!("Can not compute clocks for segment register operations")
+            }
+            RegisterMemorySegment::SegmentRegister(_) => {
+                unimplemented!("Can not compute clocks for segment register operations")
+            }
+        }
     }
 }
 

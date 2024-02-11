@@ -225,6 +225,13 @@ impl Register {
             Register::AL | Register::BL | Register::CL | Register::DL => DataSize::Byte
         }
     }
+
+    pub fn is_accumulator(&self) -> bool {
+        match self {
+            Register::AX | Register::AL => true, // AH doesn't count
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for Register {
@@ -387,7 +394,7 @@ impl fmt::Display for AddressDisplacementCalculation {
 
 #[derive(Clone, Copy)]
 pub enum RegisterMemory {
-    DirectAddress(u16),
+    DirectAddress(u16), // NOTE: Should roll direct address into AddressDisplacementCalculation. Allows segment register override on direct address
     Memory(AddressDisplacementCalculation),
     Register(Register),
 }
@@ -469,6 +476,32 @@ impl RegisterMemory {
         match self {
             RegisterMemory::DirectAddress(_) | RegisterMemory::Memory(_) => None,
             RegisterMemory::Register(reg) => Some(reg.get_size()),
+        }
+    }
+
+    pub(crate) fn get_ea_clocks(&self, transfers: u32) -> u32 {
+        match self {
+            RegisterMemory::DirectAddress(_) => 6,
+            RegisterMemory::Memory(calc) => {
+                let seg_clocks = if calc.segment_override.is_none() { 0 } else { 2 };
+                let disp_clocks = match calc.displacement {
+                    AddressDisplacement::Zero => 0,
+                    // TODO: Check unaligned access based on simulated register value.
+                    AddressDisplacement::Byte(disp) => 4 + (disp.get().abs() % 2) as u32 * transfers * 4, // Unaligned access incurs 4 clock penalty per transfer
+                    AddressDisplacement::Word(disp) => 4 + (disp.get().abs() % 2) as u32 * transfers * 4,
+                };
+                seg_clocks + disp_clocks + match calc.rm {
+                    AddressRegisterCalculation::BXpSI |
+                    AddressRegisterCalculation::BPpDI => 7,
+                    AddressRegisterCalculation::BPpSI |
+                    AddressRegisterCalculation::BXpDI => 8,
+                    AddressRegisterCalculation::SI |
+                    AddressRegisterCalculation::DI |
+                    AddressRegisterCalculation::BP |
+                    AddressRegisterCalculation::BX => 5,
+                }
+            }
+            RegisterMemory::Register(_) => 0,
         }
     }
 }

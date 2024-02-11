@@ -41,6 +41,8 @@ pub struct Simulator {
     sign_flag: bool,
 }
 
+
+
 impl Simulator {
     pub fn new(memory_size: usize, instruction_start: usize, instructions: &[u8]) -> Self {
         let mut simulator = Self {
@@ -422,12 +424,19 @@ impl Simulator {
         })
     }
     
-    pub fn simulate<F: FnMut(&mut Self, u8) -> Result<(), InterruptErr>>(&mut self, instruction: &Instruction, mut interrupt_handler: F) -> Result<String, SimulateErr> {
+    pub fn simulate<F: FnMut(&mut Self, u8) -> Result<(), InterruptErr>>(&mut self, instruction: &Instruction, mut clock_total: Option<&mut u32>, mut interrupt_handler: F) -> Result<String, SimulateErr> {
         use Instruction::*;
         
         Ok(match *instruction {
             Mov(move_op) => {
                 let data_size = move_op.get_data_size();
+
+                let mut clock_str = String::new();
+                if let Some(clock_total) = clock_total.as_deref_mut() {
+                    let clock_count = move_op.get_clocks();
+                    *clock_total += clock_count;
+                    clock_str = format!("Clocks: +{clock_count} = {clock_total} | ");
+                }
                 
                 let new_value = match move_op.src {
                     ImmediateRegisterMemorySegment::Immediate(immediate) => immediate.get_data(),
@@ -440,11 +449,11 @@ impl Simulator {
                     RegisterMemorySegment::RM(rm) => {
                         let old_value = self.write_rm(rm, new_value, data_size);
                         let new_value = self.read_rm(rm, DataSize::Word);
-                        format!("{rm}:{:#0x}->{:#0x}", old_value, new_value)
+                        format!("{clock_str}{rm}:{:#0x}->{:#0x}", old_value, new_value)
                     },
                     RegisterMemorySegment::SegmentRegister(segment) => {
                         let old_value = self.register_storage.write_segment_register(segment, new_value);
-                        format!("{segment}:{:#0x}->{:#0x}", old_value, new_value)
+                        format!("{clock_str}{segment}:{:#0x}->{:#0x}", old_value, new_value)
                     }
                 }
             }
@@ -455,7 +464,14 @@ impl Simulator {
                 self.write_rm(add_op.dest, result, data_size);
                 let new_value = self.read_rm(add_op.dest, DataSize::Word);
 
-                format!("{}:{arg0:#0x}->{new_value:#0x} {}", add_op.dest, self.set_flags(result))
+                let mut clock_str = String::new();
+                if let Some(clock_total) = clock_total.as_deref_mut() {
+                    let clock_count = add_op.get_clocks();
+                    *clock_total += clock_count;
+                    clock_str = format!("Clocks: +{clock_count} = {clock_total} | ");
+                }
+                
+                format!("{clock_str}{}:{arg0:#0x}->{new_value:#0x} {}", add_op.dest, self.set_flags(result))
             }
             Sub(sub_op) => {
                 let (arg0, arg1, data_size) = self.get_args(sub_op);

@@ -18,13 +18,16 @@ fn main() -> Result<(), std::io::Error>{
     let input = args.next().expect("First argument should be input executable.");
     let mut exec= false;
     let mut print= false; 
+    let mut clocks = false;
     let mut dump_file = None;
     while let Some(arg) = args.next() {
-        if arg == "--exec" {
+        if arg.contains("-exec") {
             exec = true;
-        } else if arg == "--print" {
+        } else if arg.contains("-print") {
             print = true;
-        } else if arg == "--dump" {
+        } else if arg.contains("-showclocks") {
+          clocks = true;  
+        } else if arg.contains("-dump") {
             dump_file = Some(if let Some(file) = args.next() {
                 file
             } else {
@@ -33,7 +36,7 @@ fn main() -> Result<(), std::io::Error>{
         }
     }
     
-    let output = simulate(Path::new(&input), DefaultDelegate {}, exec, dump_file.as_deref())?;
+    let output = simulate(Path::new(&input), DefaultDelegate {}, print, exec, clocks, dump_file.as_deref())?;
     if print || !exec {
         print!("{output}");
     }
