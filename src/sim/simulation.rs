@@ -204,6 +204,17 @@ impl Simulator {
 
                 break Instruction::new_math_instruction(math_op, rm_op);
             }
+            // Test (Register/memory to/from register)
+            else if opcode_cmp(byte1, 0b11111110, 0b10000100) {
+                let wflag = DataSize::from_wflag(flag(byte1, 0));
+
+                break Test(RegisterMemoryImmediateOp::new_reg_mem_with_reg(
+                    false,
+                    wflag,
+                    self.segment_override.take(),
+                    instructions,
+                ));
+            }
             // Inc (register)
             else if opcode_cmp(byte1, 0b11111000, 0b01000000) {
                 break Inc(RegisterMemory::Register(Register::new(DataSize::Word, byte1))) 
@@ -290,6 +301,8 @@ impl Simulator {
             
             // Match whole byte
             match byte1 {
+                // Return
+                0b11000011 => break Ret,
                 // Increment/Decrement byte (rm)
                 0b11111110 => {
                     let wflag = DataSize::Byte;
@@ -473,19 +486,43 @@ impl Simulator {
                 
                 format!("{clock_str}{}:{arg0:#0x}->{new_value:#0x} {}", add_op.dest, self.set_flags(result))
             }
-            Sub(sub_op) => {
-                let (arg0, arg1, data_size) = self.get_args(sub_op);
+            Sub(op) => {
+                let (arg0, arg1, data_size) = self.get_args(op);
                 let (result, _overflow) = arg0.overflowing_sub(arg1);
                 
-                self.write_rm(sub_op.dest, result, data_size);
-                let new_value = self.read_rm(sub_op.dest, DataSize::Word);
+                self.write_rm(op.dest, result, data_size);
+                let new_value = self.read_rm(op.dest, DataSize::Word);
                 
-                format!("{}:{arg0:#0x}->{new_value:#0x} {}", sub_op.dest, self.set_flags(result))
+                format!("{}:{arg0:#0x}->{new_value:#0x} {}", op.dest, self.set_flags(result))
             }
-            Cmp(cmp_op) => {
-                let (arg0, arg1, _) = self.get_args(cmp_op);
+            Cmp(op) => {
+                let (arg0, arg1, _) = self.get_args(op);
                 let (result, _overflow) = arg0.overflowing_sub(arg1);
                 self.set_flags(result)
+            }
+            Xor(op) => {
+                let (arg0, arg1, data_size) = self.get_args(op);
+                let result = arg0 ^ arg1;
+
+                self.write_rm(op.dest, result, data_size);
+                let new_value = self.read_rm(op.dest, DataSize::Word);
+
+                format!("{}:{arg0:#0x}->{new_value:#0x} {}", op.dest, self.set_flags(result))
+            }
+            Test(op) => {
+                let (arg0, arg1, _) = self.get_args(op);
+                let result = arg0 & arg1;
+                self.set_flags(result)
+            }
+            Inc(dest) => {
+                let data_size = dest.get_data_size().unwrap();
+                let arg0 = self.read_rm(dest, data_size);
+                let result = arg0 + 1;
+
+                self.write_rm(dest, result, data_size);
+                let new_value = self.read_rm(dest, DataSize::Word);
+
+                format!("{}:{arg0:#0x}->{new_value:#0x} {}", dest, self.set_flags(result))
             }
             Jmp(op) => {
                 let increment = match op {
@@ -528,6 +565,7 @@ impl Simulator {
                     String::new()
                 }
             }
+            Ret | // Currently return is just a halt (no stack operations implemented) 
             Halt => return Err(SimulateErr::Halt),
             _ => return Err(SimulateErr::UnknownInstruction),
         })
